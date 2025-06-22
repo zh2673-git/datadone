@@ -1,0 +1,41 @@
+# Python缓存
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# 虚拟环境
+venv/
+.env/
+.venv/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# 数据分析临时文件
+*.xls*
+*.csv
+*.tmp
+~$*
+
+# 输出目录
+output/
+
+# 日志
+*.log
+logs/
+
+# 配置和敏感信息
+config.json
+
+# IDE/编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 其他
+*.bak
+*.swp 

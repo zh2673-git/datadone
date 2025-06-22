@@ -229,14 +229,17 @@ class WordExporter:
         most_frequent_amount_info = f"{most_frequent_amount:,.2f}元 ({most_frequent_count}次)"
 
         # 生成概览段落，使用实际的换行而不是\n
-        # 为银行转账概览添加序号和加粗
         if analysis_type_str == "银行转账":
             p = doc.add_paragraph()
             p.add_run("1、银行转账概览").bold = True
             p.add_run(f"：在 {time_span_str} 期间，总收入 {total_income:,.2f} 元，总支出 {total_expense:,.2f} 元，")
             p.add_run(f"净流水 {net_flow:,.2f} 元，共计 {total_transactions_count} 笔交易。")
         else:
-            doc.add_paragraph(summary)
+            # 为其他类型（如微信、支付宝）生成概览文本
+            p = doc.add_paragraph()
+            p.add_run(f"{analysis_type_str}概览").bold = True
+            p.add_run(f"：在 {time_span_str} 期间，总收入 {total_income:,.2f} 元，总支出 {total_expense:,.2f} 元，")
+            p.add_run(f"净流水 {net_flow:,.2f} 元，共计 {total_transactions_count} 笔交易。")
         
         doc.add_paragraph(f"主要时间集中在：{major_time_str}。")
         doc.add_paragraph(f'单笔主要金额：{top_single_amounts}。')

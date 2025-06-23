@@ -14,7 +14,7 @@ class WeChatAnalyzer(PaymentAnalyzer):
     """
     微信数据分析器，用于分析微信交易数据
     """
-    def __init__(self, data_model: WeChatDataModel, group_manager: Optional[GroupManager] = None):
+    def __init__(self, data_model: WeChatDataModel, group_manager: Optional[GroupManager] = None, config: Optional[Dict] = None):
         """
         初始化微信数据分析器
         
@@ -24,11 +24,13 @@ class WeChatAnalyzer(PaymentAnalyzer):
             微信数据模型
         group_manager : GroupManager, optional
             分组管理器
+        config : dict, optional
+            配置字典
         """
         if not isinstance(data_model, WeChatDataModel):
             raise TypeError("data_model必须是WeChatDataModel类型")
         
-        super().__init__(data_model, group_manager)
+        super().__init__(data_model, group_manager, config)
         self.wechat_model = data_model
     
     # 微信特有的分析方法可以在此添加

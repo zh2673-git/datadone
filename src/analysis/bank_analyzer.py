@@ -5,16 +5,18 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Union, Optional
 from datetime import datetime
+from zhdate import ZhDate
 
 from src.base import BaseAnalyzer
 from src.datasource import BankDataModel
 from src.group import GroupManager
+from src.utils.config import Config
 
 class BankAnalyzer(BaseAnalyzer):
     """
     银行数据分析器，用于分析银行交易数据
     """
-    def __init__(self, data_model: BankDataModel, group_manager: Optional[GroupManager] = None):
+    def __init__(self, data_model: BankDataModel, group_manager: Optional[GroupManager] = None, config: Optional[Dict] = None):
         """
         初始化银行数据分析器
         
@@ -24,11 +26,13 @@ class BankAnalyzer(BaseAnalyzer):
             银行数据模型
         group_manager : GroupManager, optional
             分组管理器
+        config : dict, optional
+            配置字典
         """
         if not isinstance(data_model, BankDataModel):
             raise TypeError("data_model必须是BankDataModel类型")
         
-        super().__init__(data_model, group_manager)
+        super().__init__(data_model, group_manager, config)
         self.bank_model = data_model
 
     def analyze(self, analysis_type: str = 'all', source_name: Optional[str] = None) -> Dict[str, pd.DataFrame]:
@@ -38,7 +42,7 @@ class BankAnalyzer(BaseAnalyzer):
         Parameters:
         -----------
         analysis_type : str, optional
-            分析类型，可选值为'frequency'(交易频率分析)、'cash'(存取现分析)或'all'(全部分析)
+            分析类型，可选值为'frequency'(交易频率分析)、'cash'(存取现分析)、'special'(特殊日月分析)或'all'(全部分析)
         source_name : str, optional
             数据来源名称 (例如 '吴平一家明细.xlsx'). 如果提供, 只分析此来源.
             
@@ -47,8 +51,8 @@ class BankAnalyzer(BaseAnalyzer):
         Dict[str, pd.DataFrame]
             分析结果，键为结果名 (例如 '吴平一家明细.xlsx_存取现分析'), 值为结果数据
         """
-        if analysis_type not in ['frequency', 'cash', 'all']:
-            raise ValueError("analysis_type必须是'frequency'、'cash'或'all'")
+        if analysis_type not in ['frequency', 'cash', 'special', 'all']:
+            raise ValueError("analysis_type必须是'frequency'、'cash'、'special'或'all'")
         
         all_results = {}
         
@@ -102,6 +106,16 @@ class BankAnalyzer(BaseAnalyzer):
             frequency_result = self.analyze_frequency(source_data)
             if not frequency_result.empty:
                 results[f"{source_name}_频率分析"] = frequency_result
+
+        # 3. 特殊日月和金额分析
+        if analysis_type in ['special', 'all']:
+            special_dates_result = self.analyze_special_dates(source_data)
+            if not special_dates_result.empty:
+                results[f"{source_name}_特殊日期原始表"] = special_dates_result
+            
+            special_amounts_result = self.analyze_special_amounts(source_data)
+            if not special_amounts_result.empty:
+                results[f"{source_name}_特殊金额分析"] = special_amounts_result
 
         return results
 
@@ -200,6 +214,79 @@ class BankAnalyzer(BaseAnalyzer):
         
         # 排序
         return result.sort_values(by=['本方姓名', '交易总金额'], ascending=[True, False])
+
+    def analyze_special_dates(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        分析特殊日期的交易 (支持农历和公历)
+
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            要分析的数据
+
+        Returns:
+        --------
+        pd.DataFrame
+            发生在特殊日期的原始交易记录
+        """
+        special_dates_config = self.config.get('analysis', {}).get('special_date', {}).get('dates', {})
+        if not special_dates_config or data.empty:
+            return pd.DataFrame()
+
+        date_col = self.bank_model.date_column
+        df = data.copy()
+        df[date_col] = pd.to_datetime(df[date_col])
+        
+        # 预计算所有年份的节假日公历日期
+        years = df[date_col].dt.year.dropna().unique()
+        holiday_map = {}
+        for year_float in years:
+            year = int(year_float)
+            for name, details in special_dates_config.items():
+                try:
+                    if details['type'] == 'lunar':
+                        # 将农历日期转换为该年份的公历日期
+                        holiday_date = ZhDate(year, details['month'], details['day']).to_datetime().date()
+                    else: # solar
+                        holiday_date = datetime(year, details['month'], details['day']).date()
+                    holiday_map[holiday_date] = name
+                except (ValueError, TypeError) as e:
+                    self.logger.warning(f"无法计算日期 '{name}' 在 {year} 年: {e}")
+                    continue
+        
+        # 将交易日期标准化为date对象，并映射节假日名称
+        df['normalized_date'] = df[date_col].dt.date
+        df['特殊日期名称'] = df['normalized_date'].map(holiday_map)
+        
+        special_transactions = df.dropna(subset=['特殊日期名称']).copy()
+        
+        # 直接返回包含原始交易和特殊日期名称的DataFrame
+        return special_transactions
+
+    def analyze_special_amounts(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        分析特殊金额的交易
+
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            要分析的数据
+
+        Returns:
+        --------
+        pd.DataFrame
+            特殊金额交易分析结果
+        """
+        special_amounts_config = self.config.get('analysis', {}).get('special_amount', {}).get('amounts', [])
+        if not special_amounts_config or data.empty:
+            return pd.DataFrame()
+
+        amount_col = self.bank_model.amount_column
+        
+        # 筛选出交易金额在特殊金额列表中的交易
+        special_transactions = data[data[amount_col].abs().isin(special_amounts_config)].copy()
+        
+        return special_transactions
 
     def get_top_transactions(self, data: pd.DataFrame, top_n: int = 10, by_income: bool = True) -> pd.DataFrame:
         """

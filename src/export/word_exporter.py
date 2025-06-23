@@ -20,24 +20,28 @@ class WordExporter:
         """
         生成统一的、以人为核心的综合分析报告。
         """
-        # 存储数据模型以供后续使用
         self.data_models = data_models
         
         doc = Document()
         doc.add_heading(report_title, level=1).alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        all_persons = self._get_all_persons(data_models)
-        if not all_persons:
-            doc.add_paragraph("在所有数据中未能识别出任何分析对象（本方姓名），无法生成报告。")
+        persons_with_financials = self._get_persons_with_financial_data(data_models)
+        
+        if not persons_with_financials:
+            doc.add_paragraph("在所有数据中未能识别出任何持有金融账户（银行、微信、支付宝）的分析对象，无法生成个人详细报告。")
+            # 即使没有金融账户，仍然可以尝试生成综合交叉分析
+            if analyzers.get('comprehensive'):
+                self.generate_comprehensive_cross_analysis_section(doc, analyzers)
             self._save_document(doc, report_title)
             return
 
         # 1. 基本信息 (全局)
-        self.generate_global_basic_info(doc, all_persons, data_models)
+        self.generate_global_basic_info(doc, persons_with_financials, data_models)
 
         # 2. 个人详细分析
         doc.add_heading('二、个人详细分析', level=2)
-        for i, person_name in enumerate(all_persons):
+        doc.add_paragraph("本章节仅针对持有金融账户的个人进行详细分析。")
+        for i, person_name in enumerate(persons_with_financials):
             doc.add_heading(f'（{self._to_chinese_numeral(i + 1)}）{person_name}的综合分析', level=3)
             
             # 为每个人生成各类型的分析内容
@@ -67,6 +71,16 @@ class WordExporter:
         except Exception as e:
             self.logger.error(f"保存Word报告时出错: {e}")
             return None
+
+    def _get_persons_with_financial_data(self, data_models: Dict) -> List[str]:
+        """获取所有金融数据源中的所有不重复的本方姓名"""
+        financial_persons = set()
+        financial_data_types = ['bank', 'wechat', 'alipay']
+        for data_type in financial_data_types:
+            model = data_models.get(data_type)
+            if model and not model.data.empty and model.name_column in model.data.columns:
+                financial_persons.update(model.data[model.name_column].dropna().unique().tolist())
+        return sorted(list(financial_persons))
 
     def _get_all_persons(self, data_models: Dict) -> List[str]:
         """获取所有数据源中的所有不重复的本方姓名"""
@@ -117,6 +131,9 @@ class WordExporter:
         
         if transfer_freq_df.empty and cash_ops_df.empty:
              doc.add_paragraph(f"未找到 {person_name} 的有效银行交易数据。")
+        
+        # 特殊金额分析
+        self._generate_special_amount_summary(doc, person_name, analyzer, person_data, "银行")
 
     def generate_person_payment_analysis(self, doc: Document, person_name: str, analyzer, payment_type: str):
         doc.add_heading(f'{payment_type}资金分析', level=4)
@@ -131,6 +148,9 @@ class WordExporter:
             self._add_top_opponent_tables(doc, freq_df)
         else:
             doc.add_paragraph(f"未找到 {person_name} 的{payment_type}交易数据。")
+            
+        # 特殊金额分析
+        self._generate_special_amount_summary(doc, person_name, analyzer, person_data, payment_type)
 
     def generate_person_call_analysis(self, doc: Document, person_name: str, analyzer):
         doc.add_heading('话单通联分析', level=4)
@@ -252,6 +272,41 @@ class WordExporter:
             p.add_run(f" ({most_frequent_count}次)。").bold = False
         else:
             p.add_run(f'重复最多的金额为{most_frequent_amount_info}。')
+
+    def _generate_special_amount_summary(self, doc: Document, person_name: str, analyzer, person_data: pd.DataFrame, analysis_type_str: str):
+        """生成特殊金额分析的概要段落"""
+        special_amounts_df = analyzer.analyze_special_amounts(person_data)
+        if not special_amounts_df.empty:
+            p = doc.add_paragraph()
+            p.add_run("4、特殊金额：").bold = True
+
+            love_amounts = [520, 1314, 521]
+            amount_col = analyzer.data_model.amount_column
+            
+            unique_amounts = special_amounts_df[amount_col].abs().unique()
+            unique_amounts_str = "、".join(map(str, unique_amounts))
+            total_times = len(special_amounts_df)
+            
+            p.add_run(f"{person_name}发生{unique_amounts_str}等特殊金额{total_times}次，主要金额为")
+            
+            top_txns = special_amounts_df.sort_values(by=amount_col, key=abs, ascending=False).head(3)
+            
+            for i, row in top_txns.iterrows():
+                amount = row[amount_col]
+                opponent = row[analyzer.data_model.opposite_name_column]
+                
+                # 处理金额的run
+                amount_run = p.add_run(f"{amount:,.2f}元")
+                if abs(amount) in love_amounts:
+                    amount_run.bold = True
+                
+                # 处理对方姓名的run
+                p.add_run(f"（{opponent}）")
+
+                if i != top_txns.index[-1]:
+                    p.add_run("、")
+
+            p.add_run("。")
 
     def _add_top_opponent_tables(self, doc: Document, frequency_df: pd.DataFrame):
         """为资金分析添加Top5对手方表格"""
@@ -545,71 +600,3 @@ class WordExporter:
             cells = table.add_row().cells
             for i, value in enumerate(row):
                 cells[i].text = str(value)
-
-    def _add_comprehensive_analysis(self, doc: Document, comprehensive_results: Dict[str, pd.DataFrame]):
-        """添加综合分析结果"""
-        doc.add_heading("三、综合交叉分析", level=1)
-        doc.add_paragraph("本章节旨在展示不同数据源之间关联度最高的对手方信息。")
-        
-        # 数据源类型的中文名称
-        source_type_names = {
-            'bank': '银行',
-            'call': '话单',
-            'wechat': '微信',
-            'alipay': '支付宝'
-        }
-        
-        # 统一的显示列和格式化规则
-        display_columns = [
-            '本方姓名', '对方姓名', '对方单位', '银行总金额', '微信总金额', 
-            '支付宝总金额', '通话次数'
-        ]
-        
-        # 金额列的格式化规则
-        amount_columns = ['银行总金额', '微信总金额', '支付宝总金额']
-        
-        # 处理每个基础数据源的分析结果
-        for base_type, df in comprehensive_results.items():
-            if df is None or df.empty:
-                continue
-                
-            # 添加小标题
-            doc.add_heading(f"以{source_type_names.get(base_type, base_type)}为基础的交叉分析", level=2)
-            
-            # 如果数据为空，添加提示信息
-            if df.empty:
-                doc.add_paragraph(f"未找到与{source_type_names.get(base_type, base_type)}相关的交叉分析数据。")
-                continue
-            
-            # 处理对方单位列，如果有多个单位，只显示第一个
-            if '对方单位' in df.columns:
-                df['对方单位'] = df['对方单位'].apply(
-                    lambda x: x.split('|')[0] if pd.notna(x) and '|' in str(x) else x
-                )
-            
-            # 确保所有必需的列都存在
-            for col in display_columns:
-                if col not in df.columns:
-                    df[col] = None
-            
-            # 只保留需要显示的列，并按指定顺序排列
-            display_df = df[display_columns].copy()
-            
-            # 格式化金额列
-            for col in amount_columns:
-                if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(
-                        lambda x: f"{float(x):,.2f}" if pd.notna(x) else "N/A"
-                    )
-            
-            # 格式化通话次数列
-            if '通话次数' in display_df.columns:
-                display_df['通话次数'] = display_df['通话次数'].apply(
-                    lambda x: str(int(x)) if pd.notna(x) else "N/A"
-                )
-            
-            # 填充空值
-            display_df = display_df.fillna("N/A")
-            
-            # 添加数据表格
-            self._add_df_to_doc(doc, display_df)

@@ -12,7 +12,7 @@ class BaseAnalyzer(ABC):
     """
     分析器基类，所有分析器都应继承此类
     """
-    def __init__(self, data_model, group_manager=None):
+    def __init__(self, data_model, group_manager=None, config: dict = None):
         """
         初始化分析器
         
@@ -22,10 +22,13 @@ class BaseAnalyzer(ABC):
             数据模型对象
         group_manager : GroupManager, optional
             分组管理器对象，如果不提供则只能以个人为单位分析
+        config : dict, optional
+            配置字典
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.data_model = data_model
         self.group_manager = group_manager
+        self.config = config or {}
         self.results = {}  # 存储分析结果
         
         if data_model is None:

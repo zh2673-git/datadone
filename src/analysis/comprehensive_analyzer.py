@@ -22,7 +22,7 @@ class ComprehensiveAnalyzer:
     综合数据分析器，用于综合分析银行、话单、微信、支付宝数据
     """
 
-    def __init__(self, data_models: Dict, group_manager: Optional['GroupManager'] = None):
+    def __init__(self, data_models: Dict, group_manager: Optional['GroupManager'] = None, config: Optional[Dict] = None):
         """
         初始化综合数据分析器
 
@@ -32,18 +32,25 @@ class ComprehensiveAnalyzer:
             数据模型字典
         group_manager : GroupManager, optional
             分组管理器
+        config : dict, optional
+            配置字典
         """
         self.data_models = data_models
         self.group_manager = group_manager
+        self.config = config or {}
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.bank_analyzer = BankAnalyzer(self.data_models.get(
-            'bank'), self.group_manager) if self.data_models.get('bank') else None
-        self.call_analyzer = CallAnalyzer(self.data_models.get(
-            'call'), self.group_manager) if self.data_models.get('call') else None
-        self.wechat_analyzer = WeChatAnalyzer(self.data_models.get(
-            'wechat'), self.group_manager) if self.data_models.get('wechat') else None
-        self.alipay_analyzer = AlipayAnalyzer(self.data_models.get(
-            'alipay'), self.group_manager) if self.data_models.get('alipay') else None
+        self.bank_analyzer = BankAnalyzer(
+            self.data_models.get('bank'), self.group_manager, self.config
+        ) if self.data_models.get('bank') else None
+        self.call_analyzer = CallAnalyzer(
+            self.data_models.get('call'), self.group_manager, self.config
+        ) if self.data_models.get('call') else None
+        self.wechat_analyzer = WeChatAnalyzer(
+            self.data_models.get('wechat'), self.group_manager, self.config
+        ) if self.data_models.get('wechat') else None
+        self.alipay_analyzer = AlipayAnalyzer(
+            self.data_models.get('alipay'), self.group_manager, self.config
+        ) if self.data_models.get('alipay') else None
         self.analyzers = {
             'bank': self.bank_analyzer,
             'call': self.call_analyzer,
@@ -103,7 +110,20 @@ class ComprehensiveAnalyzer:
             self.logger.warning("综合分析需要至少两种有频率分析结果的数据，当前不足。")
             return {}
 
-        # 2. 为每个可用的数据源生成综合分析结果
+        # 2. 创建全局联系人单位映射 (话单功能2)
+        global_contact_map = {}
+        if 'call' in all_frequency_dfs:
+            call_df = all_frequency_dfs['call']
+            # 动态查找对方单位列
+            unit_col = next((col for col in call_df.columns if '对方单位名称' in col), None)
+            if unit_col:
+                # 筛选出对方姓名和单位非空的记录
+                contact_info = call_df[['对方姓名', unit_col]].dropna()
+                # 去重，保留第一个遇到的单位作为该联系人的单位
+                global_contact_map = contact_info.drop_duplicates('对方姓名').set_index('对方姓名')[unit_col].to_dict()
+                self.logger.info(f"已从话单数据中创建包含 {len(global_contact_map)} 个联系人的全局单位映射。")
+
+        # 3. 为每个可用的数据源生成综合分析结果
         final_results = {}
         for source_type in all_frequency_dfs.keys():
             base_df = all_frequency_dfs[source_type]
@@ -170,6 +190,17 @@ class ComprehensiveAnalyzer:
                         how='left',
                         suffixes=('', f'_{other_type}')
                     )
+
+            # 使用全局联系人映射填充缺失的单位信息
+            if global_contact_map:
+                # 动态查找对方单位列
+                unit_col_merged = next((col for col in merged_df.columns if '对方单位名称' in col), None)
+                if unit_col_merged:
+                    # 使用map填充缺失值
+                    merged_df[unit_col_merged] = merged_df[unit_col_merged].fillna(merged_df['对方姓名'].map(global_contact_map))
+                else:
+                    # 如果merged_df中没有单位列，则直接创建
+                    merged_df['对方单位名称'] = merged_df['对方姓名'].map(global_contact_map)
 
             if not merged_df.empty:
                 result_key = f"综合分析_以{

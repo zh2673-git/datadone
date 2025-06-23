@@ -1,48 +1,88 @@
 {
+    "meta": {
+        "version": "1.0.0",
+        "last_updated": "2025-06-23T12:18:48.400532",
+        "description": "应用配置文件"
+    },
     "data_sources": {
         "bank": {
             "name_column": "本方姓名",
             "date_column": "交易日期",
-            "time_column": "交易时间",
             "amount_column": "交易金额",
             "balance_column": "账户余额",
             "type_column": "交易类型",
-            "summary_column": "交易摘要",
-            "remark_column": "交易备注",
             "direction_column": "借贷标识",
             "opposite_name_column": "对方姓名",
-            "opposite_account_column": "对方账号",
             "special_date_column": "特殊日期名称",
+            "summary_column": "交易摘要",
+            "remark_column": "交易备注",
+            "bank_name_column": "银行类型",
+            "account_column": "本方账号",
+            "credit_flag": "贷",
+            "debit_flag": "借",
+            "time_column": "交易时间",
+            "opposite_account_column": "对方账号",
             "income_flag": "贷",
             "expense_flag": "借",
-            "deposit_keywords": ["存", "现金存", "柜台存", "存款", "现金存入", "存现"],
-            "withdraw_keywords": ["取", "现金取", "柜台取", "ATM取", "取款", "现金支取", "取现"],
-            "deposit_exclude_keywords": ["转存", "存息", "利息存入","息存","续存","转账存入"]
+            "deposit_keywords": [
+                "存",
+                "现金存",
+                "柜台存",
+                "存款",
+                "现金存入",
+                "存现"
+            ],
+            "withdraw_keywords": [
+                "取",
+                "现金取",
+                "柜台取",
+                "ATM取",
+                "取款",
+                "现金支取",
+                "取现"
+            ],
+            "deposit_exclude_keywords": [
+                "转存",
+                "存息",
+                "利息存入",
+                "息存",
+                "续存",
+                "转账存入"
+            ]
         },
         "call": {
             "name_column": "本方姓名",
             "date_column": "呼叫日期",
+            "time_column": "呼叫时间",
             "duration_column": "通话时长",
             "opposite_name_column": "对方姓名",
             "opposite_number_column": "对方号码",
+            "opposite_unit_column": "对方单位",
+            "opposite_title_column": "对方职务",
             "call_type_column": "呼叫类型",
             "special_date_column": "特殊日期名称",
+            "call_in_flag": "被叫",
+            "call_out_flag": "主叫",
+            "sms_flag": "短信",
             "opposite_company_column": "对方单位名称",
             "opposite_position_column": "对方职务",
             "opposite_location_column": "对方号码归属地"
         },
         "wechat": {
             "name_column": "本方姓名",
+            "account_column": "本方微信账号",
             "date_column": "交易日期",
             "time_column": "交易时间",
             "amount_column": "交易金额",
             "balance_column": "账户余额",
+            "type_column": "交易类型",
             "direction_column": "借贷标识",
             "opposite_name_column": "对方姓名",
-            "remark_column": "交易备注",
+            "opposite_account_column": "对方微信账号",
             "special_date_column": "特殊日期名称",
             "credit_flag": "收入",
             "debit_flag": "支出",
+            "remark_column": "交易备注",
             "transaction_type_column": "交易类型"
         },
         "alipay": {
@@ -50,15 +90,124 @@
             "date_column": "交易日期",
             "time_column": "交易时间",
             "amount_column": "交易金额",
+            "type_column": "交易型",
             "direction_column": "借贷标识",
             "opposite_name_column": "对方姓名",
-            "remark_column": "交易备注",
             "special_date_column": "特殊日期名称",
-            "credit_flag": "收入",
-            "debit_flag": "支出",
             "transaction_type_column": "交易类型",
-            "transaction_status_column": "交易状态"
+            "remark_column": "交易备注",
+            "transaction_status_column": "交易状态",
+            "credit_flag": "收入",
+            "debit_flag": "支出"
         }
+    },
+    "analysis": {
+        "bank": {
+            "deposit_keywords": [
+                "存",
+                "现金存",
+                "柜台存",
+                "存现",
+                "CRS无卡存现",
+                "ATM存现"
+            ],
+            "withdraw_keywords": [
+                "取",
+                "现金取",
+                "柜台取",
+                "ATM取",
+                "取现"
+            ],
+            "deposit_exclude_keywords": [
+                "转存",
+                "存息",
+                "利息存入",
+                "息存",
+                "续存",
+                "转账存入"
+            ]
+        },
+        "special_date": {
+            "keywords": [
+                "节日",
+                "假期",
+                "周末",
+                "春节",
+                "中秋",
+                "元旦",
+                "重阳",
+                "清明",
+                "国庆",
+                "情人节",
+                "圣诞节",
+                "端午"
+            ],
+            "dates": {
+                "元旦": { "type": "solar", "month": 1, "day": 1 },
+                "春节": { "type": "lunar", "month": 1, "day": 1 },
+                "元宵节": { "type": "lunar", "month": 1, "day": 15 },
+                "情人节": { "type": "solar", "month": 2, "day": 14 },
+                "妇女节": { "type": "solar", "month": 3, "day": 8 },
+                "清明节": { "type": "solar", "month": 4, "day": 5 },
+                "劳动节": { "type": "solar", "month": 5, "day": 1 },
+                "端午节": { "type": "lunar", "month": 5, "day": 5 },
+                "儿童节": { "type": "solar", "month": 6, "day": 1 },
+                "七夕": { "type": "lunar", "month": 7, "day": 7 },
+                "建军节": { "type": "solar", "month": 8, "day": 1 },
+                "中秋节": { "type": "lunar", "month": 8, "day": 15 },
+                "教师节": { "type": "solar", "month": 9, "day": 10 },
+                "国庆节": { "type": "solar", "month": 10, "day": 1 },
+                "重阳节": { "type": "lunar", "month": 9, "day": 9 },
+                "冬至": { "type": "solar", "month": 12, "day": 22 },
+                "平安夜": { "type": "solar", "month": 12, "day": 24 },
+                "圣诞节": { "type": "solar", "month": 12, "day": 25 }
+            }
+        },
+        "special_amount": {
+            "amounts": [
+                66,
+                88,
+                188,
+                520,
+                521,
+                666,
+                888,
+                999,
+                1314
+            ]
+        },
+        "frequency": {
+            "top_n": 20,
+            "min_transactions": 2
+        },
+        "cash": {
+            "min_amount": 1000
+        },
+        "comprehensive": {
+            "base_type": "bank"
+        }
+    },
+    "export": {
+        "default_output_dir": "output",
+        "report_template": "templates/report_template.docx",
+        "excel": {
+            "conditional_formatting": true,
+            "auto_filter": true,
+            "freeze_panes": true,
+            "default_width": 15
+        },
+        "word": {
+            "title_style": "Heading 1",
+            "subtitle_style": "Heading 2",
+            "table_style": "Table Grid",
+            "include_toc": true
+        }
+    },
+    "app": {
+        "log_level": "INFO",
+        "log_file": "logs/app.log",
+        "config_auto_reload": true,
+        "config_reload_interval": 60
     },
     "output": {
         "excel": {
@@ -72,25 +221,8 @@
             "chart_height": 4
         }
     },
-    "analysis": {
-        "bank": {
-            "deposit_keywords": ["存", "现金存", "柜台存", "存现","CRS无卡存现","ATM存现"],
-            "withdraw_keywords": ["取", "现金取", "柜台取", "ATM取", "取现"],
-            "deposit_exclude_keywords": ["转存", "存息", "利息存入","息存","续存","转账存入"]
-        },
-        "frequency": {
-            "top_n": 20,
-            "min_transactions": 2
-        },
-        "cash": {
-            "min_amount": 1000
-        },
-        "comprehensive": {
-            "base_type": "bank"
-        }
-    },
     "ui": {
         "max_preview_rows": 10,
         "max_preview_cols": 10
     }
-} 
+}

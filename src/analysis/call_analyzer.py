@@ -14,7 +14,7 @@ class CallAnalyzer(BaseAnalyzer):
     """
     话单数据分析器，用于分析通话记录数据
     """
-    def __init__(self, data_model: CallDataModel, group_manager: Optional[GroupManager] = None):
+    def __init__(self, data_model: CallDataModel, group_manager: Optional[GroupManager] = None, config: Optional[Dict] = None):
         """
         初始化话单数据分析器
         
@@ -24,11 +24,13 @@ class CallAnalyzer(BaseAnalyzer):
             话单数据模型
         group_manager : GroupManager, optional
             分组管理器
+        config : dict, optional
+            配置字典
         """
         if not isinstance(data_model, CallDataModel):
             raise TypeError("data_model必须是CallDataModel类型")
         
-        super().__init__(data_model, group_manager)
+        super().__init__(data_model, group_manager, config)
         self.call_model = data_model
     
     def analyze(self, source_name: Optional[str] = None) -> Dict[str, pd.DataFrame]:

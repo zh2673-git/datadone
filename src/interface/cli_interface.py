@@ -56,6 +56,10 @@ class CommandLineInterface(BaseInterface):
         self.config = config or Config()
         self.logger = logging.getLogger('main')
         
+        # 如果启用了热重载，则启动监控
+        if self.config.get('app', {}).get('config_auto_reload', False):
+            self.config.start_watching()
+        
         # 初始化分析器
         self._initialize_analyzers()
         
@@ -78,6 +82,9 @@ class CommandLineInterface(BaseInterface):
             
             if choice == -1:  # 退出
                 print("\n感谢使用多源数据分析系统，再见！")
+                # 停止配置文件监控
+                if self.config.get('app', {}).get('config_auto_reload', False):
+                    self.config.stop_watching()
                 break
             
             self.handle_main_menu_choice(choice)
@@ -295,16 +302,16 @@ class CommandLineInterface(BaseInterface):
         """
         if data_type == 'bank':
             from src.analysis import BankAnalyzer
-            return BankAnalyzer(model, self.group_manager)
+            return BankAnalyzer(model, self.group_manager, self.config)
         elif data_type == 'call':
             from src.analysis import CallAnalyzer
-            return CallAnalyzer(model, self.group_manager)
+            return CallAnalyzer(model, self.group_manager, self.config)
         elif data_type == 'wechat':
             from src.analysis.payment.wechat_analyzer import WeChatAnalyzer
-            return WeChatAnalyzer(model, self.group_manager)
+            return WeChatAnalyzer(model, self.group_manager, self.config)
         elif data_type == 'alipay':
             from src.analysis.payment.alipay_analyzer import AlipayAnalyzer
-            return AlipayAnalyzer(model, self.group_manager)
+            return AlipayAnalyzer(model, self.group_manager, self.config)
         return None
     
     def display_data_status(self):
@@ -338,7 +345,7 @@ class CommandLineInterface(BaseInterface):
         # 如果存在多个分析器，则创建综合分析器
         if len(self.analyzers) > 1:
             from src.analysis import ComprehensiveAnalyzer
-            self.analyzers['comprehensive'] = ComprehensiveAnalyzer(self.data_models, self.group_manager)
+            self.analyzers['comprehensive'] = ComprehensiveAnalyzer(self.data_models, self.group_manager, self.config)
             
         self.logger.info("分析器已重新初始化")
 

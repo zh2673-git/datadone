@@ -14,7 +14,7 @@ class AlipayAnalyzer(PaymentAnalyzer):
     """
     支付宝数据分析器，用于分析支付宝交易数据
     """
-    def __init__(self, data_model: AlipayDataModel, group_manager: Optional[GroupManager] = None):
+    def __init__(self, data_model: AlipayDataModel, group_manager: Optional[GroupManager] = None, config: Optional[Dict] = None):
         """
         初始化支付宝数据分析器
         
@@ -24,11 +24,13 @@ class AlipayAnalyzer(PaymentAnalyzer):
             支付宝数据模型
         group_manager : GroupManager, optional
             分组管理器
+        config : dict, optional
+            配置字典
         """
         if not isinstance(data_model, AlipayDataModel):
             raise TypeError("data_model必须是AlipayDataModel类型")
         
-        super().__init__(data_model, group_manager)
+        super().__init__(data_model, group_manager, config)
         self.alipay_model = data_model
     
     # 支付宝特有的分析方法可以在此添加

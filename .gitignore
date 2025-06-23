@@ -28,7 +28,7 @@ output/
 logs/
 
 # 配置和敏感信息
-config.json
+# config.json
 
 # IDE/编辑器
 .vscode/

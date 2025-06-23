@@ -1,0 +1,96 @@
+{
+    "data_sources": {
+        "bank": {
+            "name_column": "本方姓名",
+            "date_column": "交易日期",
+            "time_column": "交易时间",
+            "amount_column": "交易金额",
+            "balance_column": "账户余额",
+            "type_column": "交易类型",
+            "summary_column": "交易摘要",
+            "remark_column": "交易备注",
+            "direction_column": "借贷标识",
+            "opposite_name_column": "对方姓名",
+            "opposite_account_column": "对方账号",
+            "special_date_column": "特殊日期名称",
+            "income_flag": "贷",
+            "expense_flag": "借",
+            "deposit_keywords": ["存", "现金存", "柜台存", "存款", "现金存入", "存现"],
+            "withdraw_keywords": ["取", "现金取", "柜台取", "ATM取", "取款", "现金支取", "取现"],
+            "deposit_exclude_keywords": ["转存", "存息", "利息存入","息存","续存","转账存入"]
+        },
+        "call": {
+            "name_column": "本方姓名",
+            "date_column": "呼叫日期",
+            "duration_column": "通话时长",
+            "opposite_name_column": "对方姓名",
+            "opposite_number_column": "对方号码",
+            "call_type_column": "呼叫类型",
+            "special_date_column": "特殊日期名称",
+            "opposite_company_column": "对方单位名称",
+            "opposite_position_column": "对方职务",
+            "opposite_location_column": "对方号码归属地"
+        },
+        "wechat": {
+            "name_column": "本方姓名",
+            "date_column": "交易日期",
+            "time_column": "交易时间",
+            "amount_column": "交易金额",
+            "balance_column": "账户余额",
+            "direction_column": "借贷标识",
+            "opposite_name_column": "对方姓名",
+            "remark_column": "交易备注",
+            "special_date_column": "特殊日期名称",
+            "credit_flag": "收入",
+            "debit_flag": "支出",
+            "transaction_type_column": "交易类型"
+        },
+        "alipay": {
+            "name_column": "本方姓名",
+            "date_column": "交易日期",
+            "time_column": "交易时间",
+            "amount_column": "交易金额",
+            "direction_column": "借贷标识",
+            "opposite_name_column": "对方姓名",
+            "remark_column": "交易备注",
+            "special_date_column": "特殊日期名称",
+            "credit_flag": "收入",
+            "debit_flag": "支出",
+            "transaction_type_column": "交易类型",
+            "transaction_status_column": "交易状态"
+        }
+    },
+    "output": {
+        "excel": {
+            "default_dir": "output",
+            "max_rows_per_sheet": 1000000
+        },
+        "word": {
+            "default_dir": "output",
+            "max_rows_per_table": 20,
+            "chart_width": 6,
+            "chart_height": 4
+        }
+    },
+    "analysis": {
+        "bank": {
+            "deposit_keywords": ["存", "现金存", "柜台存", "存现","CRS无卡存现","ATM存现"],
+            "withdraw_keywords": ["取", "现金取", "柜台取", "ATM取", "取现"],
+            "deposit_exclude_keywords": ["转存", "存息", "利息存入","息存","续存","转账存入"]
+        },
+        "frequency": {
+            "top_n": 20,
+            "min_transactions": 2
+        },
+        "cash": {
+            "min_amount": 1000
+        },
+        "comprehensive": {
+            "base_type": "bank"
+        }
+    },
+    "ui": {
+        "max_preview_rows": 10,
+        "max_preview_cols": 10
+    }
+} 

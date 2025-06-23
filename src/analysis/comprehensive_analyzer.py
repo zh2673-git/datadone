@@ -7,12 +7,14 @@ from typing import List, Dict, Union, Optional, Tuple
 from datetime import datetime
 import logging
 
-from src.datasource import BankDataModel, CallDataModel, WeChatDataModel, AlipayDataModel
+from src.datasource import BankDataModel, CallDataModel
+from src.datasource.payment.wechat_model import WeChatDataModel
+from src.datasource.payment.alipay_model import AlipayDataModel
 from src.group import GroupManager
 from src.analysis.bank_analyzer import BankAnalyzer
 from src.analysis.call_analyzer import CallAnalyzer
-from src.analysis.wechat_analyzer import WeChatAnalyzer
-from src.analysis.alipay_analyzer import AlipayAnalyzer
+from src.analysis.payment.wechat_analyzer import WeChatAnalyzer
+from src.analysis.payment.alipay_analyzer import AlipayAnalyzer
 
 
 class ComprehensiveAnalyzer:

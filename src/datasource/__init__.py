@@ -3,7 +3,10 @@
 
 from .bank_model import BankDataModel
 from .call_model import CallDataModel
-from .wechat_model import WeChatDataModel
-from .alipay_model import AlipayDataModel
 
-__all__ = ['BankDataModel', 'CallDataModel', 'WeChatDataModel', 'AlipayDataModel'] 
+# 导入支付相关模型
+from .payment import PaymentDataModel
+from .payment.alipay_model import AlipayDataModel
+from .payment.wechat_model import WeChatDataModel
+
+__all__ = ['BankDataModel', 'CallDataModel', 'WeChatDataModel', 'AlipayDataModel', 'PaymentDataModel'] 

@@ -270,10 +270,10 @@ class CommandLineInterface(BaseInterface):
             from src.datasource import CallDataModel
             return CallDataModel
         elif data_type == 'wechat':
-            from src.datasource import WeChatDataModel
+            from src.datasource.payment.wechat_model import WeChatDataModel
             return WeChatDataModel
         elif data_type == 'alipay':
-            from src.datasource import AlipayDataModel
+            from src.datasource.payment.alipay_model import AlipayDataModel
             return AlipayDataModel
         return None
             
@@ -300,10 +300,10 @@ class CommandLineInterface(BaseInterface):
             from src.analysis import CallAnalyzer
             return CallAnalyzer(model, self.group_manager)
         elif data_type == 'wechat':
-            from src.analysis import WeChatAnalyzer
+            from src.analysis.payment.wechat_analyzer import WeChatAnalyzer
             return WeChatAnalyzer(model, self.group_manager)
         elif data_type == 'alipay':
-            from src.analysis import AlipayAnalyzer
+            from src.analysis.payment.alipay_analyzer import AlipayAnalyzer
             return AlipayAnalyzer(model, self.group_manager)
         return None
     
@@ -430,20 +430,48 @@ class CommandLineInterface(BaseInterface):
             其他参数
         """
         try:
-            if analysis_type_options:
-                type_choice_map = {str(i+1): opt for i, opt in enumerate(analysis_type_options)}
-                type_options_display = [f'{i+1}. {opt}' for i, opt in enumerate(analysis_type_options)]
-                type_choice = self.display_menu(type_options_display, f"请选择{analyzer_name}分析类型", allow_empty=True)
-                if type_choice != -1 and type_choice in type_choice_map:
-                    selected_analysis_type = type_choice_map[type_choice]
-                    self.logger.info(f"选择的分析类型: {selected_analysis_type}")
+            # 获取分析器
+            analyzer = self.analyzers.get(analyzer_name)
+            if not analyzer:
+                self.display_error(f"分析器 {analyzer_name} 不存在或未初始化")
+                return
+            
+            # 获取该分析器可用的数据源
+            sources = analyzer.data_model.get_data_sources()
+            if not sources:
+                self.display_error(f"{analyzer_name} 分析器没有可用的数据源")
+                return
+            
+            # 如果有多个数据源，让用户选择
+            source = None
+            if len(sources) > 1:
+                source_options = ["所有数据源"] + sources
+                source_choice = self.display_menu(source_options, f"请选择要分析的{analyzer_name}数据源", allow_empty=True)
+                if source_choice == -1:
+                    return  # 用户取消
+                elif source_choice == 0:
+                    source = None  # 分析所有数据源
                 else:
-                    self.logger.info("未选择特定分析类型，使用默认'all'")
-                    selected_analysis_type = 'all' # 默认值
+                    source = source_options[source_choice]
+            else:
+                source = sources[0]  # 只有一个数据源
+            
+            # 如果有分析类型选项，让用户选择
+            if analysis_type_options:
+                type_options_display = [f"{opt}" for opt in analysis_type_options]
+                type_choice = self.display_menu(type_options_display, f"请选择{analyzer_name}分析类型", allow_empty=True)
+                if type_choice == -1:
+                    return  # 用户取消
+                
+                selected_analysis_type = analysis_type_options[type_choice]
                 kwargs['analysis_type'] = selected_analysis_type
-
+                self.logger.info(f"选择的分析类型: {selected_analysis_type}")
+            
             # 执行分析
-            self.logger.info(f"对数据来源 {source} 执行 {analyzer_name} 分析...")
+            if source:
+                self.logger.info(f"对数据来源 {source} 执行 {analyzer_name} 分析...")
+            else:
+                self.logger.info(f"对所有数据源执行 {analyzer_name} 分析...")
             
             # 使用kwargs解包来传递analysis_type或其他额外参数
             results = analyzer.analyze(source_name=source, **kwargs)
@@ -451,13 +479,16 @@ class CommandLineInterface(BaseInterface):
             if results:
                 for key, df in results.items():
                     self.analysis_results[key] = df
-                self.display_success(f"已完成数据来源 '{source}' 的 {analyzer_name} 分析")
+                if source:
+                    self.display_success(f"已完成数据来源 '{source}' 的 {analyzer_name} 分析")
+                else:
+                    self.display_success(f"已完成所有数据源的 {analyzer_name} 分析")
             else:
-                self.display_warning(f"数据来源 '{source}' 的 {analyzer_name} 分析没有返回结果")
+                self.display_warning(f"{analyzer_name} 分析没有返回结果")
         except Exception as e:
             self.logger.error(f"运行 {analyzer_name} 分析失败: {e}")
             self.logger.debug(traceback.format_exc())
-            self.display_error(f"运行 {analyzer_name} 分析失败")
+            self.display_error(f"运行 {analyzer_name} 分析失败: {str(e)}")
 
     def run_comprehensive_analysis(self):
         """

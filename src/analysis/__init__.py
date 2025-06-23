@@ -3,8 +3,18 @@
 
 from .bank_analyzer import BankAnalyzer
 from .call_analyzer import CallAnalyzer
-from .wechat_analyzer import WeChatAnalyzer
-from .alipay_analyzer import AlipayAnalyzer
 from .comprehensive_analyzer import ComprehensiveAnalyzer
 
-__all__ = ['BankAnalyzer', 'CallAnalyzer', 'WeChatAnalyzer', 'AlipayAnalyzer', 'ComprehensiveAnalyzer'] 
+# 导入支付相关分析器
+from .payment import PaymentAnalyzer
+from .payment.alipay_analyzer import AlipayAnalyzer
+from .payment.wechat_analyzer import WeChatAnalyzer
+
+__all__ = [
+    'BankAnalyzer', 
+    'CallAnalyzer', 
+    'AlipayAnalyzer', 
+    'WeChatAnalyzer', 
+    'ComprehensiveAnalyzer',
+    'PaymentAnalyzer'
+] 

@@ -297,14 +297,70 @@ class WordExporter:
         
         p = doc.add_paragraph()
         p.add_run(f"{section_num}、{cash_type}概览").bold = True
-        p.add_run(f"：总{cash_type}{total_count}笔，总金额{total_amount:,.2f}元。")
-        
-        # 查找单笔金额最高的交易
+        p.add_run(f"：总{cash_type}{total_count}笔，总金额")
+
+        amount_run = p.add_run(f"{total_amount:,.2f}元")
+        if cash_type == '存现':
+            amount_run.bold = True
+            if total_amount >= 1_000_000:
+                amount_run.underline = True
+        p.add_run("。")
+
+        # 查找相关的原始交易数据
         person_cash_data = bank_model.data[
-            (bank_model.data['本方姓名'] == person_name) & 
+            (bank_model.data[bank_model.name_column] == person_name) & 
             (bank_model.data['存取现标识'] == cash_type)
-        ]
-        if not person_cash_data.empty:
+        ].copy()
+
+        if person_cash_data.empty:
+            return
+
+        # 仅对"存现"进行详细分析和生成表格
+        if cash_type == '存现':
+            # 计算主要时间集中
+            person_cash_data['年份月份'] = person_cash_data[bank_model.date_column].dt.strftime('%Y年%m月')
+            monthly_counts = person_cash_data.groupby('年份月份').size().reset_index(name='次数')
+            top_months = monthly_counts.nlargest(3, '次数')
+            major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
+            doc.add_paragraph(f"主要时间集中在：{major_time_str}。")
+
+            # 单笔主要金额（重复最多的金额）
+            amount_counts = person_cash_data[bank_model.amount_column].abs().value_counts()
+            if not amount_counts.empty:
+                most_frequent_amount = amount_counts.index[0]
+                most_frequent_count = amount_counts.iloc[0]
+                most_frequent_amount_info = f"{most_frequent_amount:,.2f}元 ({most_frequent_count}次)"
+                doc.add_paragraph(f"单笔主要金额：{most_frequent_amount_info}。")
+
+            # 单笔金额前五名
+            doc.add_paragraph(f"单笔{cash_type}金额前五名：")
+            top_5_transactions = person_cash_data.nlargest(5, bank_model.amount_column, keep='all')
+            
+            if not top_5_transactions.empty:
+                table = doc.add_table(rows=1, cols=4, style='Table Grid')
+                hdr_cells = table.rows[0].cells
+                headers = ['交易日期', '交易金额', '对方名称', '交易摘要']
+                for i, header in enumerate(headers):
+                    hdr_cells[i].text = header
+
+                for _, row in top_5_transactions.iterrows():
+                    row_cells = table.add_row().cells
+                    row_cells[0].text = row[bank_model.date_column].strftime('%Y-%m-%d')
+                    
+                    amount = row[bank_model.amount_column]
+                    amount_p = row_cells[1].paragraphs[0]
+                    amount_p.text = ''  # 清空单元格默认段落
+                    run = amount_p.add_run(f"{amount:,.2f}")
+                    if amount >= 10000:
+                        run.bold = True
+                    
+                    opponent_name = row[bank_model.opposite_name_column]
+                    row_cells[2].text = str(opponent_name) if pd.notna(opponent_name) else 'N/A'
+                    
+                    summary = row[bank_model.summary_column]
+                    row_cells[3].text = str(summary) if pd.notna(summary) else 'N/A'
+        else:
+            # 对于"取现"，只显示单笔最高金额
             top_transaction = person_cash_data.loc[person_cash_data[bank_model.amount_column].abs().idxmax()]
             top_amount = top_transaction[bank_model.amount_column]
             top_date = top_transaction[bank_model.date_column].strftime('%Y年%m月%d日')

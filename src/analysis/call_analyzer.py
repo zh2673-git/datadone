@@ -111,6 +111,8 @@ class CallAnalyzer(BaseAnalyzer):
             self.logger.warning("没有通话记录数据")
             return pd.DataFrame()
         
+        df = data.copy()
+
         # 获取相关列名
         name_col = self.call_model.name_column
         opposite_number_col = self.call_model.opposite_phone_column
@@ -120,23 +122,28 @@ class CallAnalyzer(BaseAnalyzer):
         date_col = self.call_model.date_column
         duration_col = self.call_model.duration_column
         
-        # 定义分组键
+        # 解决"对方姓名"为空导致整行被分组忽略的问题
+        df[opposite_name_col] = df[opposite_name_col].fillna('未知')
+        # 解决"对方号码"为空的问题
+        df[opposite_number_col] = df[opposite_number_col].fillna('无号码')
+
+        # 定义分组键, 按本方、对方、对方号码分组，实现逐行显示
         group_cols = [name_col, opposite_name_col, opposite_number_col]
 
         # 1. 聚合计算
         agg_operations = {
             duration_col: ['sum', 'count'],
-            date_col: ['min', 'max']
+            date_col: ['min', 'max'],
         }
         
         # 如果存在对方单位和职务列，添加到聚合操作中
-        if opposite_company_col in data.columns:
+        if opposite_company_col in df.columns:
             agg_operations[opposite_company_col] = lambda x: '|'.join(sorted(set(x.dropna().astype(str))))
-        if opposite_position_col in data.columns:
+        if opposite_position_col in df.columns:
             agg_operations[opposite_position_col] = lambda x: '|'.join(sorted(set(x.dropna().astype(str))))
         
         # 按所有相关信息分组
-        result = data.groupby(group_cols).agg(agg_operations)
+        result = df.groupby(group_cols).agg(agg_operations)
         
         # 扁平化多级列索引
         result.columns = ['_'.join(col).strip('_') for col in result.columns.values]
@@ -194,11 +201,11 @@ class CallAnalyzer(BaseAnalyzer):
                 ordered_cols.append(col)
 
         result = result[ordered_cols]
-        result['数据来源'] = data['数据来源'].iloc[0]
+        result['数据来源'] = df['数据来源'].iloc[0]
         
         return result.sort_values(by=['本方姓名', '通话次数'], ascending=[True, False])
     
-    def get_most_frequent_calls(self, person_name: Optional[str] = None, top_n: int = 10) -> pd.DataFrame:
+    def get_most_frequent_calls(self, person_name: Optional[str] = None, top_n: int = 99999) -> pd.DataFrame:
         """
         获取最频繁通话的对方
         

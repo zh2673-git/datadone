@@ -305,7 +305,7 @@ class WordExporter:
             if total_amount >= 1_000_000:
                 amount_run.underline = True
         p.add_run("。")
-
+        
         # 查找相关的原始交易数据
         person_cash_data = bank_model.data[
             (bank_model.data[bank_model.name_column] == person_name) & 
@@ -334,7 +334,7 @@ class WordExporter:
 
             # 单笔金额前五名
             doc.add_paragraph(f"单笔{cash_type}金额前五名：")
-            top_5_transactions = person_cash_data.nlargest(5, bank_model.amount_column, keep='all')
+            top_5_transactions = person_cash_data.nlargest(5, bank_model.amount_column, keep='first')
             
             if not top_5_transactions.empty:
                 table = doc.add_table(rows=1, cols=4, style='Table Grid')
@@ -416,105 +416,110 @@ class WordExporter:
         if len(available_sources) < 2:
             return
 
+        all_results_df = pd.DataFrame()
+
         for base_source in available_sources:
-            doc.add_heading(f"以{comprehensive_analyzer._get_chinese_data_type_name(base_source)}为基础的交叉分析", level=3)
-            
             results = comprehensive_analyzer.analyze(base_source=base_source)
             result_key = f"综合分析_以{comprehensive_analyzer._get_chinese_data_type_name(base_source)}为基准"
             
-            if not results or result_key not in results or results[result_key].empty:
-                doc.add_paragraph("未生成有效的交叉分析结果。")
-                continue
+            if results and result_key in results and not results[result_key].empty:
+                all_results_df = pd.concat([all_results_df, results[result_key]], ignore_index=True)
 
-            df = results[result_key]
+        if all_results_df.empty:
+            doc.add_paragraph("未生成有效的交叉分析结果。")
+            return
 
-            # 筛选出至少在两个不同类型数据中都出现过的对手方
-            count_cols = [col for col in df.columns if '次数' in col or '总额' in col]
+        # 全局去重，保留关联数据源数量最多的记录
+        count_cols = [col for col in all_results_df.columns if '次数' in col or '总额' in col]
+        if not count_cols:
+             # 如果没有可用于计数的列，则无法计算关联数据源，直接按姓名去重
+            display_df = all_results_df.drop_duplicates(subset=['本方姓名', '对方姓名']).head(10)
+        else:
+            all_results_df['关联数据源数量'] = all_results_df[count_cols].notna().sum(axis=1)
+            # 按"本方姓名"和"对方姓名"分组，保留每个分组中"关联数据源数量"最大的那一行
+            deduplicated_df = all_results_df.loc[all_results_df.groupby(['本方姓名', '对方姓名'])['关联数据源数量'].idxmax()]
             
-            if not count_cols:
-                display_df = df.head(10)
-            else:
-                df['关联数据源数量'] = df[count_cols].notna().sum(axis=1)
-                correlated_df = df[df['关联数据源数量'] > 1].sort_values(by='关联数据源数量', ascending=False)
-                display_df = correlated_df.head(10) 
+            # 在去重后的结果中，筛选出至少在两个不同类型数据中都出现过的对手方，并取前10条
+            correlated_df = deduplicated_df[deduplicated_df['关联数据源数量'] > 1].sort_values(by='关联数据源数量', ascending=False)
+            display_df = correlated_df.head(10)
 
-            if display_df.empty:
-                doc.add_paragraph("未发现显著关联的对手方。")
-                continue
-            
-            # 创建一个新的DataFrame用于显示
-            final_df = pd.DataFrame()
-            
-            # 复制基本列
-            final_df['本方姓名'] = display_df['本方姓名']
-            final_df['对方姓名'] = display_df['对方姓名']
-            
-            # 处理对方单位列
-            # 首先检查是否有带后缀的对方单位列（来自话单数据）
-            unit_col = next((col for col in display_df.columns if '对方单位名称_' in col), None)
-            if unit_col:
-                final_df['对方单位'] = display_df[unit_col]
-            elif '对方单位' in display_df.columns:
-                # 如果有多个单位（用|分隔），只取第一个
-                final_df['对方单位'] = display_df['对方单位'].apply(
-                    lambda x: x.split('|')[0] if pd.notna(x) and '|' in str(x) else x
-                )
-            else:
-                final_df['对方单位'] = None
-            
-            # 处理金额和次数列
-            # 银行总额
-            if '银行总额' in display_df.columns:
-                final_df['银行总金额'] = display_df['银行总额']
-            elif '交易总金额' in display_df.columns and base_source == 'bank':
-                final_df['银行总金额'] = display_df['交易总金额']
-            else:
-                final_df['银行总金额'] = None
-                
-            # 微信总额
-            if '微信总额' in display_df.columns:
-                final_df['微信总金额'] = display_df['微信总额']
-            elif '交易总金额' in display_df.columns and base_source == 'wechat':
-                final_df['微信总金额'] = display_df['交易总金额']
-            else:
-                final_df['微信总金额'] = None
-                
-            # 支付宝总额
-            if '支付宝总额' in display_df.columns:
-                final_df['支付宝总金额'] = display_df['支付宝总额']
-            elif '交易总金额' in display_df.columns and base_source == 'alipay':
-                final_df['支付宝总金额'] = display_df['交易总金额']
-            else:
-                final_df['支付宝总金额'] = None
-                
-            # 通话次数
-            if '通话次数' in display_df.columns:
-                final_df['通话次数'] = display_df['通话次数']
-            else:
-                final_df['通话次数'] = None
-            
-            # 填充空值
-            final_df = final_df.fillna('N/A')
-            
-            # 格式化金额列
-            for col in ['银行总金额', '微信总金额', '支付宝总金额']:
-                final_df[col] = final_df[col].apply(
-                    lambda x: f"{float(x):,.2f}" if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').replace('-', '').isdigit()) else x
-                )
-            
-            # 格式化通话次数列
-            final_df['通话次数'] = final_df['通话次数'].apply(
-                lambda x: str(int(float(x))) if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').isdigit()) else x
+        if display_df.empty:
+            doc.add_paragraph("未发现显著关联的对手方。")
+            return
+        
+        # 创建一个新的DataFrame用于显示
+        final_df = pd.DataFrame()
+        
+        # 复制基本列
+        final_df['本方姓名'] = display_df['本方姓名']
+        final_df['对方姓名'] = display_df['对方姓名']
+        
+        # 处理对方单位列
+        # 首先检查是否有带后缀的对方单位列（来自话单数据）
+        unit_col = next((col for col in display_df.columns if '对方单位名称_' in col), None)
+        if unit_col:
+            final_df['对方单位'] = display_df[unit_col]
+        elif '对方单位' in display_df.columns:
+            # 如果有多个单位（用|分隔），只取第一个
+            final_df['对方单位'] = display_df['对方单位'].apply(
+                lambda x: x.split('|')[0] if pd.notna(x) and '|' in str(x) else x
             )
+        else:
+            final_df['对方单位'] = None
+        
+        # 处理金额和次数列
+        # 银行总额
+        if '银行总额' in display_df.columns:
+            final_df['银行总金额'] = display_df['银行总额']
+        elif '交易总金额' in display_df.columns and base_source == 'bank':
+            final_df['银行总金额'] = display_df['交易总金额']
+        else:
+            final_df['银行总金额'] = None
             
-            # 定义最终显示列的顺序
-            display_columns = [
-                '本方姓名', '对方姓名', '对方单位',
-                '银行总金额', '微信总金额', '支付宝总金额', '通话次数'
-            ]
+        # 微信总额
+        if '微信总额' in display_df.columns:
+            final_df['微信总金额'] = display_df['微信总额']
+        elif '交易总金额' in display_df.columns and base_source == 'wechat':
+            final_df['微信总金额'] = display_df['交易总金额']
+        else:
+            final_df['微信总金额'] = None
             
-            # 添加到文档
-            self._add_df_to_doc(doc, final_df[display_columns])
+        # 支付宝总额
+        if '支付宝总额' in display_df.columns:
+            final_df['支付宝总金额'] = display_df['支付宝总额']
+        elif '交易总金额' in display_df.columns and base_source == 'alipay':
+            final_df['支付宝总金额'] = display_df['交易总金额']
+        else:
+            final_df['支付宝总金额'] = None
+            
+        # 通话次数
+        if '通话次数' in display_df.columns:
+            final_df['通话次数'] = display_df['通话次数']
+        else:
+            final_df['通话次数'] = None
+        
+        # 填充空值
+        final_df = final_df.fillna('N/A')
+        
+        # 格式化金额列
+        for col in ['银行总金额', '微信总金额', '支付宝总金额']:
+            final_df[col] = final_df[col].apply(
+                lambda x: f"{float(x):,.2f}" if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').replace('-', '').isdigit()) else x
+            )
+        
+        # 格式化通话次数列
+        final_df['通话次数'] = final_df['通话次数'].apply(
+            lambda x: str(int(float(x))) if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').isdigit()) else x
+        )
+        
+        # 定义最终显示列的顺序
+        display_columns = [
+            '本方姓名', '对方姓名', '对方单位',
+            '银行总金额', '微信总金额', '支付宝总金额', '通话次数'
+        ]
+        
+        # 添加到文档
+        self._add_df_to_doc(doc, final_df[display_columns])
 
     def _add_top_opponent_tables(self, doc: Document, frequency_df: pd.DataFrame):
         """为资金分析添加Top5对手方表格"""
@@ -523,8 +528,8 @@ class WordExporter:
         if not income_df.empty:
             # 计算总收入占比
             income_df['收入占比'] = income_df['总收入'] / (income_df['总收入'] - income_df['总支出']) * 100
-            # 筛选出收入占比为100%的记录
-            pure_income_df = income_df[income_df['收入占比'] == 100].nlargest(5, '总收入')
+            # 筛选出收入占比为100%的记录，并严格保留前5名
+            pure_income_df = income_df[income_df['收入占比'] == 100].nlargest(5, '总收入', keep='first')
             
             if not pure_income_df.empty:
                 doc.add_paragraph("转入金额占比100%的金额前5名对手方如下：")

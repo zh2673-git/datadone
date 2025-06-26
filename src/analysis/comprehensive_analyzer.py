@@ -103,8 +103,7 @@ class ComprehensiveAnalyzer:
                     all_frequency_dfs[data_type] = pd.concat(
                         freq_dfs, ignore_index=True)
             except Exception as e:
-                self.logger.error(f"在为综合分析准备 '{data_type}' 数据时出错: {
-                                  e}", exc_info=True)
+                self.logger.error(f"在为综合分析准备 '{data_type}' 数据时出错: {e}", exc_info=True)
 
         if len(all_frequency_dfs) < 2:
             self.logger.warning("综合分析需要至少两种有频率分析结果的数据，当前不足。")
@@ -203,10 +202,8 @@ class ComprehensiveAnalyzer:
                     merged_df['对方单位名称'] = merged_df['对方姓名'].map(global_contact_map)
 
             if not merged_df.empty:
-                result_key = f"综合分析_以{
-                    self._get_chinese_data_type_name(source_type)}为基准"
-                final_results[result_key] = self._format_comprehensive_result(
-                    merged_df)
+                result_key = f"综合分析_以{self._get_chinese_data_type_name(source_type)}为基准"
+                final_results[result_key] = self._format_comprehensive_result(merged_df)
                 self.logger.info(f"完成基于{source_type}的综合分析")
 
         if not final_results:

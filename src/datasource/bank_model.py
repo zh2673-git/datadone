@@ -152,23 +152,25 @@ class BankDataModel(BaseDataModel):
         deposit_exclude_pattern = '|'.join(self.deposit_exclude_keywords)
         withdraw_pattern = '|'.join(self.withdraw_keywords)
 
+        # 存现：对方姓名为空 + 交易摘要或备注包含存现关键词 + 不包含排除关键词 + 借贷标识为"贷"
         deposit_mask = empty_opposite_mask & (
             (summary_col.str.contains(deposit_pattern, case=False, na=False)) |
             (remark_col.str.contains(deposit_pattern, case=False, na=False))
         ) & ~(
             (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
             (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False))
-        )
+        ) & (self.data[self.direction_column] == self.income_flag)  # 确保借贷标识为"贷"
         
         self.data.loc[deposit_mask, '存取现标识'] = '存现'
         self.data.loc[deposit_mask, '收入金额'] = self.data.loc[deposit_mask, self.amount_column].abs()
 
         # 2. 在未被识别为存现且"对方姓名"为空的记录中，识别取现
         remaining_mask = ~deposit_mask & empty_opposite_mask
+        # 取现：对方姓名为空 + 交易摘要或备注包含取现关键词 + 借贷标识为"借"
         withdraw_mask = remaining_mask & (
             (summary_col.str.contains(withdraw_pattern, case=False, na=False)) |
             (remark_col.str.contains(withdraw_pattern, case=False, na=False))
-        )
+        ) & (self.data[self.direction_column] == self.expense_flag)  # 确保借贷标识为"借"
         
         self.data.loc[withdraw_mask, '存取现标识'] = '取现'
         self.data.loc[withdraw_mask, '支出金额'] = self.data.loc[withdraw_mask, self.amount_column].abs()

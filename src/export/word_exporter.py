@@ -187,42 +187,58 @@ class WordExporter:
         if not freq_df.empty:
             self._generate_call_summary_paragraph(doc, person_name, freq_df, person_data)
             
-            doc.add_paragraph("最密切联系人TOP 5:")
-            top_5 = freq_df.nlargest(5, '通话次数')
+            # 过滤掉对方姓名为"未知"的记录
+            known_contacts = freq_df[~freq_df['对方姓名'].isin(['未知', 'N/A', '']) & ~freq_df['对方姓名'].isna()]
             
-            # 创建一个新的DataFrame用于显示
-            display_df = pd.DataFrame()
-            
-            # 复制基本列
-            display_df['对方姓名'] = top_5['对方姓名']
-            display_df['对方号码'] = top_5['对方号码']
-            display_df['通话次数'] = top_5['通话次数']
-            display_df['通话总时长(分钟)'] = top_5['通话总时长(分钟)']
-            
-            # 处理对方单位列
-            # 首先检查是否有带后缀的对方单位列（来自话单数据）
-            unit_col = next((col for col in top_5.columns if '对方单位名称_' in col), None)
-            if unit_col:
-                display_df['对方单位'] = top_5[unit_col]
-            elif '对方单位' in top_5.columns:
-                # 如果有多个单位（用|分隔），只取第一个
-                display_df['对方单位'] = top_5['对方单位'].apply(
-                    lambda x: x.split('|')[0] if pd.notna(x) and '|' in str(x) else x
-                )
+            # 如果没有已知联系人，尝试使用其他数据
+            if known_contacts.empty:
+                # 使用所有数据，但后续会按号码等其他信息排序
+                known_contacts = freq_df.copy()
+                # 按通话次数排序
+                top_contacts = known_contacts.nlargest(5, '通话次数')
             else:
-                display_df['对方单位'] = None
+                # 只使用已知联系人，按通话次数排序
+                top_contacts = known_contacts.nlargest(5, '通话次数')
             
-            # 填充空值
-            display_df['对方单位'] = display_df['对方单位'].fillna('N/A')
-            
-            # 定义最终显示列的顺序
-            display_columns = [
-                '对方姓名', '对方单位', '对方号码', 
-                '通话次数', '通话总时长(分钟)'
-            ]
-            
-            # 添加到文档
-            self._add_df_to_doc(doc, display_df[display_columns])
+            # 如果有数据可显示
+            if not top_contacts.empty:
+                doc.add_paragraph(f"最密切联系人TOP {min(5, len(top_contacts))}:")
+                
+                # 创建一个新的DataFrame用于显示
+                display_df = pd.DataFrame()
+                
+                # 复制基本列
+                display_df['对方姓名'] = top_contacts['对方姓名']
+                display_df['对方号码'] = top_contacts['对方号码']
+                display_df['通话次数'] = top_contacts['通话次数']
+                display_df['通话总时长(分钟)'] = top_contacts['通话总时长(分钟)']
+                
+                # 处理对方单位列
+                # 首先检查是否有带后缀的对方单位列（来自话单数据）
+                unit_col = next((col for col in top_contacts.columns if '对方单位名称_' in col), None)
+                if unit_col:
+                    display_df['对方单位'] = top_contacts[unit_col]
+                elif '对方单位' in top_contacts.columns:
+                    # 如果有多个单位（用|分隔），只取第一个
+                    display_df['对方单位'] = top_contacts['对方单位'].apply(
+                        lambda x: x.split('|')[0] if pd.notna(x) and '|' in str(x) else x
+                    )
+                else:
+                    display_df['对方单位'] = None
+                
+                # 填充空值
+                display_df['对方单位'] = display_df['对方单位'].fillna('N/A')
+                
+                # 定义最终显示列的顺序
+                display_columns = [
+                    '对方姓名', '对方单位', '对方号码', 
+                    '通话次数', '通话总时长(分钟)'
+                ]
+                
+                # 添加到文档
+                self._add_df_to_doc(doc, display_df[display_columns])
+            else:
+                doc.add_paragraph("没有找到有效的联系人信息。")
         else:
             doc.add_paragraph(f"未找到 {person_name} 的通话频率数据。")
 

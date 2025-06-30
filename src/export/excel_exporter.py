@@ -331,21 +331,42 @@ class ExcelExporter(BaseExporter):
             'bg_color': '#D9E1F2',
             'border': 1
         })
-        
-        # 数值格式
-        number_format = workbook.add_format({'num_format': '#,##0.00'})
+
+        # 不同类型的数值格式
+        money_format = workbook.add_format({'num_format': '#,##0.00'})  # 金额格式
+        integer_format = workbook.add_format({'num_format': '0'})  # 整数格式
+        phone_format = workbook.add_format({'num_format': '@'})  # 文本格式
         date_format = workbook.add_format({'num_format': 'yyyy-mm-dd'})
-        
+
         # 应用表头格式
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_format)
-        
-        # 为数值和日期列应用格式
+
+        # 为不同类型的列应用相应格式
         for col_num, col_name in enumerate(df.columns):
-            if col_name in df and pd.api.types.is_numeric_dtype(df[col_name]):
-                worksheet.set_column(col_num, col_num, None, number_format)
+            col_name_lower = col_name.lower()
+
+            # 序号、次数、数量等应该是整数
+            if any(keyword in col_name for keyword in ['序号', '次数', '数量', '笔数', '个数', '排名']):
+                worksheet.set_column(col_num, col_num, None, integer_format)
+            # 电话号码、银行卡号、身份证号等应该是文本
+            elif any(keyword in col_name for keyword in ['电话', '号码', '手机', '银行卡', '身份证', '卡号']):
+                worksheet.set_column(col_num, col_num, None, phone_format)
+            # 金额相关列
+            elif any(keyword in col_name for keyword in ['金额', '总额', '收入', '支出', '余额', '价格']):
+                worksheet.set_column(col_num, col_num, None, money_format)
+            # 日期列
             elif col_name in df and pd.api.types.is_datetime64_any_dtype(df[col_name]):
                 worksheet.set_column(col_num, col_num, None, date_format)
+            # 其他数值列但不是金额的，检查是否应该是整数
+            elif col_name in df and pd.api.types.is_numeric_dtype(df[col_name]):
+                # 检查数据是否都是整数
+                if df[col_name].notna().any():
+                    sample_values = df[col_name].dropna().head(10)
+                    if all(float(val).is_integer() for val in sample_values if pd.notna(val)):
+                        worksheet.set_column(col_num, col_num, None, integer_format)
+                    else:
+                        worksheet.set_column(col_num, col_num, None, money_format)
         
         # 添加条件格式
         if self.excel_config.get('conditional_formatting', True):

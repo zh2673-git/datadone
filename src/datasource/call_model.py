@@ -36,7 +36,7 @@ class CallDataModel(BaseDataModel):
         self.duration_column = self.config.get('data_sources.call.duration_column', '通话时长')
         self.call_type_column = self.config.get('data_sources.call.call_type_column', '呼叫类型')
         self.opposite_name_column = self.config.get('data_sources.call.opposite_name_column', '对方姓名')
-        self.opposite_phone_column = self.config.get('data_sources.call.opposite_phone_column', '对方号码')
+        self.opposite_phone_column = self.config.get('data_sources.call.opposite_number_column', '对方号码')
         self.opposite_location_column = self.config.get('data_sources.call.opposite_location_column', '对方号码归属地')
         self.opposite_company_column = self.config.get('data_sources.call.opposite_company_column', '对方单位名称')
         self.opposite_position_column = self.config.get('data_sources.call.opposite_position_column', '对方职务')

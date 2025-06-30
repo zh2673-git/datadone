@@ -6,7 +6,7 @@ import os
 import logging
 from typing import Dict, List, Optional
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 class WordExporter:
@@ -44,7 +44,7 @@ class WordExporter:
         for i, person_name in enumerate(persons_with_financials):
             doc.add_heading(f'（{self._to_chinese_numeral(i + 1)}）{person_name}的综合分析', level=3)
             
-            # 为每个人生成各类型的分析内容
+            # 生成各类型的详细分析内容
             if analyzers.get('bank'):
                 self.generate_person_bank_analysis(doc, person_name, analyzers['bank'])
             if analyzers.get('wechat'):
@@ -59,6 +59,321 @@ class WordExporter:
             self.generate_comprehensive_cross_analysis_section(doc, analyzers)
 
         self._save_document(doc, report_title)
+
+    def _collect_person_summary_data(self, person_name: str, analyzers: Dict) -> Dict:
+        """收集个人总结所需的数据"""
+        summary_data = {
+            'person_name': person_name,
+            'bank_data': {},
+            'payment_data': {},
+            'call_data': {},
+            'advanced_analysis': {}
+        }
+
+        # 银行数据分析
+        if analyzers.get('bank'):
+            bank_analyzer = analyzers['bank']
+            person_data = bank_analyzer.bank_model.get_data_by_person(person_name)
+            if not person_data.empty:
+                # 基础统计
+                total_income = person_data[person_data['收入金额'] > 0]['收入金额'].sum()
+                total_expense = person_data[person_data['支出金额'] > 0]['支出金额'].sum()
+                transaction_count = len(person_data)
+
+                # 存取现分析
+                cash_data = person_data[person_data['存取现标识'].isin(['存现', '取现'])]
+                deposit_data = person_data[person_data['存取现标识'] == '存现']
+                withdraw_data = person_data[person_data['存取现标识'] == '取现']
+
+                # 时间跨度
+                date_range = person_data[bank_analyzer.bank_model.date_column].agg(['min', 'max'])
+                time_span_days = (date_range['max'] - date_range['min']).days
+
+                summary_data['bank_data'] = {
+                    'total_income': total_income,
+                    'total_expense': total_expense,
+                    'net_flow': total_income - total_expense,
+                    'transaction_count': transaction_count,
+                    'time_span_days': time_span_days,
+                    'cash_transaction_count': len(cash_data),
+                    'deposit_count': len(deposit_data),
+                    'withdraw_count': len(withdraw_data),
+                    'deposit_amount': deposit_data['收入金额'].sum() if not deposit_data.empty else 0,
+                    'withdraw_amount': withdraw_data['支出金额'].sum() if not withdraw_data.empty else 0,
+                    'avg_transaction_amount': person_data['交易金额'].abs().mean(),
+                    'max_transaction_amount': person_data['交易金额'].abs().max(),
+                    'date_range': date_range
+                }
+
+                # 高级分析数据
+                try:
+                    # 时间模式分析
+                    time_patterns = bank_analyzer.advanced_analysis_engine.analyze_time_patterns(
+                        person_data, bank_analyzer.bank_model.date_column, '交易时间'
+                    )
+
+                    # 金额模式分析
+                    amount_patterns = bank_analyzer.advanced_analysis_engine.analyze_amount_patterns(
+                        person_data, '交易金额'
+                    )
+
+                    # 异常检测
+                    anomalies = bank_analyzer.advanced_analysis_engine.detect_anomalies(
+                        person_data, '本方姓名', '交易金额', bank_analyzer.bank_model.date_column, '交易时间'
+                    )
+
+                    # 交易模式识别
+                    transaction_patterns = bank_analyzer.advanced_analysis_engine.analyze_transaction_patterns(
+                        person_data, '本方姓名', '交易金额', bank_analyzer.bank_model.date_column
+                    )
+
+                    summary_data['advanced_analysis'] = {
+                        'time_patterns': time_patterns,
+                        'amount_patterns': amount_patterns,
+                        'anomalies': anomalies,
+                        'transaction_patterns': transaction_patterns
+                    }
+                except Exception as e:
+                    self.logger.warning(f"高级分析数据收集失败: {e}")
+
+        # 通话数据分析
+        if analyzers.get('call'):
+            call_analyzer = analyzers['call']
+            person_data = call_analyzer.call_model.get_data_by_person(person_name)
+            if not person_data.empty:
+                total_calls = len(person_data)
+                total_duration = person_data[call_analyzer.call_model.duration_column].sum()
+                unique_contacts = person_data[call_analyzer.call_model.opposite_phone_column].nunique()
+
+                summary_data['call_data'] = {
+                    'total_calls': total_calls,
+                    'total_duration_minutes': total_duration / 60,
+                    'unique_contacts': unique_contacts,
+                    'avg_call_duration': total_duration / total_calls if total_calls > 0 else 0
+                }
+
+        return summary_data
+
+    def _generate_summary_paragraphs(self, person_name: str, summary_data: Dict) -> List[str]:
+        """生成总结段落"""
+        paragraphs = []
+
+        # 基础交易概况
+        bank_data = summary_data.get('bank_data', {})
+        if bank_data:
+            # 交易概况
+            transaction_count = bank_data.get('transaction_count', 0)
+            time_span_days = bank_data.get('time_span_days', 0)
+            total_income = bank_data.get('total_income', 0)
+            total_expense = bank_data.get('total_expense', 0)
+            net_flow = bank_data.get('net_flow', 0)
+
+            if transaction_count > 0:
+                paragraphs.append(
+                    f"【交易概况】{person_name}在{time_span_days}天内共发生{transaction_count}笔银行交易，"
+                    f"总收入{total_income:,.2f}元，总支出{total_expense:,.2f}元，"
+                    f"净流入{net_flow:,.2f}元。"
+                )
+
+        # 交易行为特征分析
+        advanced_data = summary_data.get('advanced_analysis', {})
+        if advanced_data:
+            behavior_insights = self._analyze_behavior_patterns(advanced_data, bank_data)
+            if behavior_insights:
+                paragraphs.append(f"【行为特征】{behavior_insights}")
+
+        # 存取现行为分析
+        if bank_data:
+            cash_insights = self._analyze_cash_behavior(bank_data)
+            if cash_insights:
+                paragraphs.append(f"【存取现行为】{cash_insights}")
+
+        # 异常行为提醒
+        if advanced_data.get('anomalies', {}).get('anomalies'):
+            anomaly_insights = self._analyze_anomalies(advanced_data['anomalies'])
+            if anomaly_insights:
+                paragraphs.append(f"【异常提醒】{anomaly_insights}")
+
+        # 规律性分析
+        if advanced_data:
+            pattern_insights = self._analyze_regular_patterns(advanced_data, bank_data)
+            if pattern_insights:
+                paragraphs.append(f"【规律性分析】{pattern_insights}")
+
+        # 通话行为分析
+        call_data = summary_data.get('call_data', {})
+        if call_data:
+            call_insights = self._analyze_call_behavior(call_data)
+            if call_insights:
+                paragraphs.append(f"【通话行为】{call_insights}")
+
+        return paragraphs
+
+    def _analyze_behavior_patterns(self, advanced_data: Dict, bank_data: Dict) -> str:
+        """分析行为模式"""
+        insights = []
+
+        # 时间偏好分析
+        time_patterns = advanced_data.get('time_patterns', {})
+        if time_patterns:
+            weekday_dist = time_patterns.get('weekday_distribution', {})
+            working_hours = time_patterns.get('working_hours_analysis', {})
+
+            if weekday_dist:
+                workday_ratio = weekday_dist.get('工作日占比', 0)
+                if workday_ratio > 0.8:
+                    insights.append("偏好工作日交易")
+                elif workday_ratio < 0.3:
+                    insights.append("偏好周末交易")
+
+            if working_hours:
+                work_time_ratio = working_hours.get('工作时间占比', 0)
+                if work_time_ratio > 0.8:
+                    insights.append("主要在工作时间进行交易")
+                elif work_time_ratio < 0.3:
+                    insights.append("主要在非工作时间进行交易")
+
+        # 金额偏好分析
+        amount_patterns = advanced_data.get('amount_patterns', {})
+        if amount_patterns:
+            round_analysis = amount_patterns.get('round_number_analysis', {})
+            if round_analysis:
+                round_ratio = round_analysis.get('整百金额占比', 0)
+                if round_ratio > 0.7:
+                    insights.append("强烈偏好整数金额")
+                elif round_ratio > 0.4:
+                    insights.append("较偏好整数金额")
+
+        # 交易模式分析
+        transaction_patterns = advanced_data.get('transaction_patterns', {})
+        if transaction_patterns:
+            person_patterns = transaction_patterns.get('person_patterns', {})
+            if person_patterns:
+                for person, pattern in person_patterns.items():
+                    if pattern.get('是否有规律时间间隔', False):
+                        interval = pattern.get('最常见时间间隔', 0)
+                        if interval == 30:
+                            insights.append("疑似每月固定交易（如工资、房租）")
+                        elif interval == 7:
+                            insights.append("疑似每周固定交易")
+                        elif interval > 0:
+                            insights.append(f"存在{interval}天的规律性交易间隔")
+
+        return "；".join(insights) + "。" if insights else ""
+
+    def _analyze_cash_behavior(self, bank_data: Dict) -> str:
+        """分析存取现行为"""
+        insights = []
+
+        cash_count = bank_data.get('cash_transaction_count', 0)
+        deposit_count = bank_data.get('deposit_count', 0)
+        withdraw_count = bank_data.get('withdraw_count', 0)
+        deposit_amount = bank_data.get('deposit_amount', 0)
+        withdraw_amount = bank_data.get('withdraw_amount', 0)
+        total_count = bank_data.get('transaction_count', 0)
+
+        if cash_count > 0:
+            cash_ratio = cash_count / total_count if total_count > 0 else 0
+            if cash_ratio > 0.5:
+                insights.append("频繁进行存取现操作")
+            elif cash_ratio > 0.2:
+                insights.append("较常进行存取现操作")
+
+            if deposit_count > withdraw_count:
+                insights.append("存现次数多于取现")
+            elif withdraw_count > deposit_count:
+                insights.append("取现次数多于存现")
+
+            if deposit_amount > withdraw_amount * 2:
+                insights.append("存现金额显著大于取现金额")
+            elif withdraw_amount > deposit_amount * 2:
+                insights.append("取现金额显著大于存现金额")
+        else:
+            insights.append("无存取现交易记录")
+
+        return "；".join(insights) + "。" if insights else ""
+
+    def _analyze_anomalies(self, anomalies: Dict) -> str:
+        """分析异常情况"""
+        insights = []
+
+        anomaly_list = anomalies.get('anomalies', [])
+        for anomaly in anomaly_list:
+            anomaly_type = anomaly.get('type', '')
+            if anomaly_type == '高频交易':
+                count = anomaly.get('count', 0)
+                insights.append(f"存在高频交易异常（{count}次）")
+            elif anomaly_type == '金额异常':
+                amounts = anomaly.get('outlier_amounts', [])
+                if amounts:
+                    max_amount = max(amounts)
+                    insights.append(f"存在异常大额交易（{max_amount:,.0f}元）")
+            elif anomaly_type == '时间间隔异常':
+                insights.append("存在短时间连续交易")
+
+        return "；".join(insights) + "。" if insights else ""
+
+    def _analyze_regular_patterns(self, advanced_data: Dict, bank_data: Dict) -> str:
+        """分析规律性模式"""
+        insights = []
+
+        avg_amount = bank_data.get('avg_transaction_amount', 0)
+
+        # 推测可能的固定支出
+        if avg_amount > 0:
+            if 2000 <= avg_amount <= 8000:
+                insights.append("平均交易金额符合工资水平特征")
+            elif 1000 <= avg_amount <= 5000:
+                insights.append("平均交易金额符合房租或贷款特征")
+            elif avg_amount < 500:
+                insights.append("以小额日常消费为主")
+            elif avg_amount > 20000:
+                insights.append("以大额交易为主")
+
+        # 分析金额分布
+        amount_patterns = advanced_data.get('amount_patterns', {})
+        if amount_patterns:
+            ranges = amount_patterns.get('amount_ranges', {})
+            if ranges:
+                small_ratio = ranges.get('小额', {}).get('占比', 0)
+                large_ratio = ranges.get('大额', {}).get('占比', 0)
+
+                if small_ratio > 0.7:
+                    insights.append("主要为日常小额消费")
+                elif large_ratio > 0.3:
+                    insights.append("存在较多大额交易")
+
+        return "；".join(insights) + "。" if insights else ""
+
+    def _analyze_call_behavior(self, call_data: Dict) -> str:
+        """分析通话行为"""
+        insights = []
+
+        total_calls = call_data.get('total_calls', 0)
+        unique_contacts = call_data.get('unique_contacts', 0)
+        avg_duration = call_data.get('avg_call_duration', 0)
+
+        if total_calls > 0:
+            if total_calls > 1000:
+                insights.append("通话频率极高")
+            elif total_calls > 500:
+                insights.append("通话频率较高")
+            elif total_calls < 50:
+                insights.append("通话频率较低")
+
+            if unique_contacts > 0:
+                contact_ratio = total_calls / unique_contacts
+                if contact_ratio > 10:
+                    insights.append("与少数人频繁通话")
+                elif contact_ratio < 2:
+                    insights.append("联系人分布较广泛")
+
+            if avg_duration > 300:  # 5分钟
+                insights.append("通话时长较长")
+            elif avg_duration < 60:  # 1分钟
+                insights.append("通话时长较短")
+
+        return "；".join(insights) + "。" if insights else ""
 
     def _save_document(self, doc: Document, title: str) -> Optional[str]:
         try:
@@ -583,16 +898,8 @@ class WordExporter:
         # 填充空值
         final_df = final_df.fillna('N/A')
         
-        # 格式化金额列，最多保留2位小数
-        for col in ['银行总金额', '微信总金额', '支付宝总金额']:
-            final_df[col] = final_df[col].apply(
-                lambda x: f"{float(x):.2f}" if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').replace('-', '').isdigit()) else x
-            )
-        
-        # 格式化通话次数列
-        final_df['通话次数'] = final_df['通话次数'].apply(
-            lambda x: str(int(float(x))) if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').isdigit()) else x
-        )
+        # 格式化数值列
+        self._format_dataframe_numbers(final_df)
         
         # 定义最终显示列的顺序
         display_columns = [
@@ -664,27 +971,59 @@ class WordExporter:
             return numerals[num]
         return str(num)
 
+    def _format_dataframe_numbers(self, df: pd.DataFrame):
+        """格式化DataFrame中的数字列"""
+        for col in df.columns:
+            col_name_lower = col.lower()
+
+            # 金额列保留2位小数
+            if any(keyword in col for keyword in ['金额', '总额', '收入', '支出', '余额', '价格']):
+                df[col] = df[col].apply(
+                    lambda x: f"{float(x):.2f}" if self._is_numeric_value(x) else x
+                )
+            # 次数、序号等整数列
+            elif any(keyword in col for keyword in ['次数', '序号', '数量', '笔数', '个数', '排名']):
+                df[col] = df[col].apply(
+                    lambda x: str(int(float(x))) if self._is_numeric_value(x) else x
+                )
+            # 电话号码、银行卡号等保持原样（文本格式）
+            elif any(keyword in col for keyword in ['电话', '号码', '手机', '银行卡', '身份证', '卡号']):
+                df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) else x)
+
+    def _is_numeric_value(self, x):
+        """检查值是否为数字"""
+        if pd.isna(x):
+            return False
+        if isinstance(x, (int, float)):
+            return True
+        if isinstance(x, str):
+            try:
+                float(x)
+                return True
+            except ValueError:
+                return False
+        return False
+
     def _add_df_to_doc(self, doc: Document, df: pd.DataFrame):
         if df.empty:
             doc.add_paragraph("无相关数据。")
             return
-        
-        # 格式化数值列，最多保留2位小数
-        for col in df.columns:
-            if df[col].dtype.kind in 'fc':  # 浮点数或复数
-                df[col] = df[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else 'N/A')
-        
-        df = df.fillna('N/A').astype(str)
-        
-        table = doc.add_table(rows=1, cols=len(df.columns))
+
+        # 格式化数值列
+        df_copy = df.copy()
+        self._format_dataframe_numbers(df_copy)
+
+        df_copy = df_copy.fillna('N/A').astype(str)
+
+        table = doc.add_table(rows=1, cols=len(df_copy.columns))
         table.style = 'Table Grid'
-        
+
         # 设置表头
-        for i, column in enumerate(df.columns):
+        for i, column in enumerate(df_copy.columns):
             table.cell(0, i).text = str(column)
-            
+
         # 添加数据行
-        for _, row in df.iterrows():
+        for _, row in df_copy.iterrows():
             cells = table.add_row().cells
             for i, value in enumerate(row):
                 cells[i].text = str(value)

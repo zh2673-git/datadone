@@ -10,6 +10,7 @@ import os
 
 from src.base import BaseDataModel
 from src.utils.config import Config
+from src.utils.cash_recognition import CashRecognitionEngine
 
 class BankDataModel(BaseDataModel):
     """
@@ -58,7 +59,27 @@ class BankDataModel(BaseDataModel):
         self.deposit_keywords = self.config.get('analysis.bank.deposit_keywords', ['存', '现金存', '柜台存', '存款', '现金存入', '存现'])
         self.withdraw_keywords = self.config.get('analysis.bank.withdraw_keywords', ['取', '现金取', '柜台取', 'ATM取', '取款', '现金支取', '取现'])
         self.deposit_exclude_keywords = self.config.get('analysis.bank.deposit_exclude_keywords', ['转存', '存息', '利息存入'])
-        
+        self.withdraw_exclude_keywords = self.config.get('analysis.bank.withdraw_exclude_keywords', ['转取', '利息取出', '息取'])
+
+        # 增强识别配置
+        self.enable_enhanced_algorithm = self.config.get('analysis.cash.recognition.enable_enhanced_algorithm', True)
+        self.confidence_threshold = self.config.get('analysis.cash.recognition.confidence_threshold', 0.5)
+        self.high_priority_confidence = self.config.get('analysis.cash.recognition.high_priority_confidence', 0.95)
+        self.medium_priority_confidence = self.config.get('analysis.cash.recognition.medium_priority_confidence', 0.8)
+        self.low_priority_confidence = self.config.get('analysis.cash.recognition.low_priority_confidence', 0.6)
+        self.large_amount_threshold = self.config.get('analysis.cash.recognition.large_amount_threshold', 100000)
+        self.small_amount_threshold = self.config.get('analysis.cash.recognition.small_amount_threshold', 10)
+        self.enable_fuzzy_matching = self.config.get('analysis.cash.recognition.enable_fuzzy_matching', True)
+        self.enable_amount_analysis = self.config.get('analysis.cash.recognition.enable_amount_analysis', True)
+        self.enable_time_analysis = self.config.get('analysis.cash.recognition.enable_time_analysis', False)
+        self.common_cash_amounts = self.config.get('analysis.cash.recognition.common_cash_amounts', [100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000, 50000])
+        self.round_amount_modulos = self.config.get('analysis.cash.recognition.round_amount_modulos', [50, 100])
+        self.high_priority_deposit_keywords = self.config.get('analysis.cash.recognition.high_priority_deposit_keywords', ['ATM存现', 'CRS无卡存现', '柜台存现'])
+        self.high_priority_withdraw_keywords = self.config.get('analysis.cash.recognition.high_priority_withdraw_keywords', ['ATM取现', 'CRS无卡取现', '柜台取现'])
+
+        # 初始化存取现识别引擎
+        self.cash_recognition_engine = CashRecognitionEngine(self.config)
+
         # 调用父类初始化
         super().__init__(data_path, data)
     
@@ -129,51 +150,25 @@ class BankDataModel(BaseDataModel):
     def add_cash_operation_flag(self):
         """
         添加存取现标识，并处理存取现交易的收入和支出金额。
-        按照"先存现、后取现、再转账"的逻辑处理，避免重复统计。
+        使用统一的识别引擎，支持基础和增强两种识别模式。
         """
-        self.data['存取现标识'] = '转账'  # 默认为转账
+        # 准备列名配置
+        columns_config = {
+            'opposite_name_column': self.opposite_name_column,
+            'summary_column': self.summary_column,
+            'remark_column': self.remark_column,
+            'direction_column': self.direction_column,
+            'amount_column': self.amount_column,
+            'income_flag': self.income_flag,
+            'expense_flag': self.expense_flag
+        }
 
-        # 必须是对方姓名为空的交易，才可能是存取现
-        opposite_name_col_present = self.opposite_name_column in self.data.columns
-        if opposite_name_col_present:
-            empty_opposite_mask = self.data[self.opposite_name_column].isna() | \
-                                  (self.data[self.opposite_name_column].astype(str).str.strip() == '') | \
-                                  (self.data[self.opposite_name_column].astype(str).str.strip() == '\\N')
-        else:
-            # 如果没有对方姓名字段，则所有记录都可能是存取现
-            empty_opposite_mask = pd.Series([True] * len(self.data), index=self.data.index)
+        # 使用识别引擎进行识别
+        self.data = self.cash_recognition_engine.recognize_cash_operations(self.data, columns_config)
 
-        # 获取相关列，并填充空值为''
-        summary_col = self.data[self.summary_column].astype(str).fillna('')
-        remark_col = self.data[self.remark_column].astype(str).fillna('')
-
-        # 1. 优先在"对方姓名"为空的记录中识别存现
-        deposit_pattern = '|'.join(self.deposit_keywords)
-        deposit_exclude_pattern = '|'.join(self.deposit_exclude_keywords)
-        withdraw_pattern = '|'.join(self.withdraw_keywords)
-
-        # 存现：对方姓名为空 + 交易摘要或备注包含存现关键词 + 不包含排除关键词 + 借贷标识为"贷"
-        deposit_mask = empty_opposite_mask & (
-            (summary_col.str.contains(deposit_pattern, case=False, na=False)) |
-            (remark_col.str.contains(deposit_pattern, case=False, na=False))
-        ) & ~(
-            (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
-            (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False))
-        ) & (self.data[self.direction_column] == self.income_flag)  # 确保借贷标识为"贷"
-        
-        self.data.loc[deposit_mask, '存取现标识'] = '存现'
-        self.data.loc[deposit_mask, '收入金额'] = self.data.loc[deposit_mask, self.amount_column].abs()
-
-        # 2. 在未被识别为存现且"对方姓名"为空的记录中，识别取现
-        remaining_mask = ~deposit_mask & empty_opposite_mask
-        # 取现：对方姓名为空 + 交易摘要或备注包含取现关键词 + 借贷标识为"借"
-        withdraw_mask = remaining_mask & (
-            (summary_col.str.contains(withdraw_pattern, case=False, na=False)) |
-            (remark_col.str.contains(withdraw_pattern, case=False, na=False))
-        ) & (self.data[self.direction_column] == self.expense_flag)  # 确保借贷标识为"借"
-        
-        self.data.loc[withdraw_mask, '存取现标识'] = '取现'
-        self.data.loc[withdraw_mask, '支出金额'] = self.data.loc[withdraw_mask, self.amount_column].abs()
+        # 记录识别统计信息
+        stats = self.cash_recognition_engine.get_recognition_stats(self.data)
+        self.logger.info(f"存取现识别完成: {stats}")
 
         self.logger.info("存取现标识添加完成")
 

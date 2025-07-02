@@ -29,11 +29,11 @@ class CashRecognitionEngine:
     
     def _load_config(self):
         """加载配置参数"""
-        # 基础关键词配置
-        self.deposit_keywords = self.config.get('analysis.bank.deposit_keywords', [])
-        self.withdraw_keywords = self.config.get('analysis.bank.withdraw_keywords', [])
-        self.deposit_exclude_keywords = self.config.get('analysis.bank.deposit_exclude_keywords', [])
-        self.withdraw_exclude_keywords = self.config.get('analysis.bank.withdraw_exclude_keywords', [])
+        # 基础关键词配置（修正配置路径）
+        self.deposit_keywords = self.config.get('data_sources.bank.deposit_keywords', [])
+        self.withdraw_keywords = self.config.get('data_sources.bank.withdraw_keywords', [])
+        self.deposit_exclude_keywords = self.config.get('data_sources.bank.deposit_exclude_keywords', [])
+        self.withdraw_exclude_keywords = self.config.get('data_sources.bank.withdraw_exclude_keywords', [])
         
         # 增强识别配置
         self.enable_enhanced_algorithm = self.config.get('analysis.cash.recognition.enable_enhanced_algorithm', True)
@@ -50,7 +50,37 @@ class CashRecognitionEngine:
         self.round_amount_modulos = self.config.get('analysis.cash.recognition.round_amount_modulos', [50, 100])
         self.high_priority_deposit_keywords = self.config.get('analysis.cash.recognition.high_priority_deposit_keywords', [])
         self.high_priority_withdraw_keywords = self.config.get('analysis.cash.recognition.high_priority_withdraw_keywords', [])
-    
+
+        # 验证配置加载情况
+        self._validate_config()
+
+    def _validate_config(self):
+        """验证配置加载情况"""
+        self.logger.info("=== 存取现识别配置验证 ===")
+        self.logger.info(f"存现关键词数量: {len(self.deposit_keywords)}")
+        self.logger.info(f"取现关键词数量: {len(self.withdraw_keywords)}")
+        self.logger.info(f"存现排除关键词数量: {len(self.deposit_exclude_keywords)}")
+        self.logger.info(f"取现排除关键词数量: {len(self.withdraw_exclude_keywords)}")
+        self.logger.info(f"高优先级存现关键词数量: {len(self.high_priority_deposit_keywords)}")
+        self.logger.info(f"高优先级取现关键词数量: {len(self.high_priority_withdraw_keywords)}")
+
+        # 检查关键配置是否为空
+        if not self.deposit_keywords:
+            self.logger.warning("⚠️  存现关键词为空，中优先级识别将失效")
+        if not self.withdraw_keywords:
+            self.logger.warning("⚠️  取现关键词为空，中优先级识别将失效")
+        if not self.deposit_exclude_keywords:
+            self.logger.warning("⚠️  存现排除关键词为空，转账过滤将失效")
+        if not self.withdraw_exclude_keywords:
+            self.logger.warning("⚠️  取现排除关键词为空，转账过滤将失效")
+
+        # 显示部分关键词示例
+        if self.deposit_keywords:
+            self.logger.info(f"存现关键词示例: {self.deposit_keywords[:5]}")
+        if self.deposit_exclude_keywords:
+            self.logger.info(f"存现排除关键词示例: {self.deposit_exclude_keywords[:5]}")
+        self.logger.info("=== 配置验证完成 ===")
+
     def recognize_cash_operations(self, data: pd.DataFrame, columns_config: Dict[str, str]) -> pd.DataFrame:
         """
         识别存取现操作
@@ -195,14 +225,29 @@ class CashRecognitionEngine:
                                  summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
                                  direction_column: str, amount_column: str,
                                  income_flag: str, expense_flag: str):
-        """高优先级精确匹配识别"""
+        """高优先级精确匹配识别（也需要排除转账）"""
+        # 构建排除模式
+        deposit_exclude_pattern = '|'.join(self.deposit_exclude_keywords) if self.deposit_exclude_keywords else ''
+        withdraw_exclude_pattern = '|'.join(self.withdraw_exclude_keywords) if self.withdraw_exclude_keywords else ''
+
         # 存现高优先级匹配
         for keyword in self.high_priority_deposit_keywords:
-            mask = empty_opposite_mask & (
+            # 第1步：基础匹配（只处理未识别的转账）
+            base_mask = empty_opposite_mask & (
                 (summary_col.str.contains(keyword, case=False, na=False)) |
                 (remark_col.str.contains(keyword, case=False, na=False)) |
                 (type_col.str.contains(keyword, case=False, na=False))
-            ) & (data[direction_column] == income_flag)
+            ) & (data[direction_column] == income_flag) & (data['存取现标识'] == '转账')
+
+            # 第2步：排除转账
+            if deposit_exclude_pattern:
+                mask = base_mask & ~(
+                    (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                    (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                    (type_col.str.contains(deposit_exclude_pattern, case=False, na=False))
+                )
+            else:
+                mask = base_mask
 
             if mask.any():
                 data.loc[mask, '存取现标识'] = '存现'
@@ -212,11 +257,22 @@ class CashRecognitionEngine:
 
         # 取现高优先级匹配
         for keyword in self.high_priority_withdraw_keywords:
-            mask = empty_opposite_mask & (
+            # 第1步：基础匹配
+            base_mask = empty_opposite_mask & (
                 (summary_col.str.contains(keyword, case=False, na=False)) |
                 (remark_col.str.contains(keyword, case=False, na=False)) |
                 (type_col.str.contains(keyword, case=False, na=False))
             ) & (data[direction_column] == expense_flag) & (data['存取现标识'] == '转账')
+
+            # 第2步：排除转账
+            if withdraw_exclude_pattern:
+                mask = base_mask & ~(
+                    (summary_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
+                    (remark_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
+                    (type_col.str.contains(withdraw_exclude_pattern, case=False, na=False))
+                )
+            else:
+                mask = base_mask
 
             if mask.any():
                 data.loc[mask, '存取现标识'] = '取现'
@@ -363,6 +419,10 @@ class CashRecognitionEngine:
                                 direction_column: str, amount_column: str,
                                 income_flag: str, expense_flag: str):
         """低优先级上下文分析识别"""
+        # 构建排除模式
+        deposit_exclude_pattern = '|'.join(self.deposit_exclude_keywords) if self.deposit_exclude_keywords else ''
+        withdraw_exclude_pattern = '|'.join(self.withdraw_exclude_keywords) if self.withdraw_exclude_keywords else ''
+
         # 基于金额特征的识别（整数金额更可能是存取现）
         round_amount_conditions = []
         for modulo in self.round_amount_modulos:
@@ -373,11 +433,21 @@ class CashRecognitionEngine:
         amount_mask = data[amount_column].abs().isin(self.common_cash_amounts) if self.common_cash_amounts else pd.Series([False] * len(data))
 
         # 模糊匹配：包含"现"字但不在排除列表中
-        fuzzy_cash_mask = empty_opposite_mask & (
+        base_fuzzy_mask = empty_opposite_mask & (
             (summary_col.str.contains('现', case=False, na=False)) |
             (remark_col.str.contains('现', case=False, na=False)) |
             (type_col.str.contains('现', case=False, na=False))
         ) & (data['存取现标识'] == '转账')
+
+        # 排除转账相关交易（这是关键修复）
+        if deposit_exclude_pattern:
+            fuzzy_cash_mask = base_fuzzy_mask & ~(
+                (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(deposit_exclude_pattern, case=False, na=False))
+            )
+        else:
+            fuzzy_cash_mask = base_fuzzy_mask
 
         # 存现模糊匹配
         fuzzy_deposit_mask = fuzzy_cash_mask & (data[direction_column] == income_flag) & (round_amount_mask | amount_mask)

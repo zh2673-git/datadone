@@ -55,11 +55,11 @@ class BankDataModel(BaseDataModel):
             self.direction_column
         ]
         
-        # 存取现关键词
-        self.deposit_keywords = self.config.get('analysis.bank.deposit_keywords', ['存', '现金存', '柜台存', '存款', '现金存入', '存现'])
-        self.withdraw_keywords = self.config.get('analysis.bank.withdraw_keywords', ['取', '现金取', '柜台取', 'ATM取', '取款', '现金支取', '取现'])
-        self.deposit_exclude_keywords = self.config.get('analysis.bank.deposit_exclude_keywords', ['转存', '存息', '利息存入'])
-        self.withdraw_exclude_keywords = self.config.get('analysis.bank.withdraw_exclude_keywords', ['转取', '利息取出', '息取'])
+        # 存取现关键词（修正配置路径）
+        self.deposit_keywords = self.config.get('data_sources.bank.deposit_keywords', ['存', '现金存', '柜台存', '存款', '现金存入', '存现'])
+        self.withdraw_keywords = self.config.get('data_sources.bank.withdraw_keywords', ['取', '现金取', '柜台取', 'ATM取', '取款', '现金支取', '取现'])
+        self.deposit_exclude_keywords = self.config.get('data_sources.bank.deposit_exclude_keywords', ['转存', '存息', '利息存入'])
+        self.withdraw_exclude_keywords = self.config.get('data_sources.bank.withdraw_exclude_keywords', ['转取', '利息取出', '息取'])
 
         # 增强识别配置
         self.enable_enhanced_algorithm = self.config.get('analysis.cash.recognition.enable_enhanced_algorithm', True)

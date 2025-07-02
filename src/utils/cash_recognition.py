@@ -82,6 +82,7 @@ class CashRecognitionEngine:
         opposite_name_column = columns_config.get('opposite_name_column')
         summary_column = columns_config.get('summary_column')
         remark_column = columns_config.get('remark_column')
+        type_column = columns_config.get('type_column')
         direction_column = columns_config.get('direction_column')
         amount_column = columns_config.get('amount_column')
         income_flag = columns_config.get('income_flag')
@@ -106,20 +107,21 @@ class CashRecognitionEngine:
         # 获取相关列，并填充空值
         summary_col = result_data[summary_column].astype(str).fillna('')
         remark_col = result_data[remark_column].astype(str).fillna('')
-        
+        type_col = result_data[type_column].astype(str).fillna('') if type_column and type_column in result_data.columns else pd.Series([''] * len(result_data))
+
         # 执行识别
         if self.enable_enhanced_algorithm:
-            self._enhanced_recognition(result_data, empty_opposite_mask, summary_col, remark_col, 
+            self._enhanced_recognition(result_data, empty_opposite_mask, summary_col, remark_col, type_col,
                                      direction_column, amount_column, income_flag, expense_flag)
         else:
-            self._basic_recognition(result_data, empty_opposite_mask, summary_col, remark_col,
+            self._basic_recognition(result_data, empty_opposite_mask, summary_col, remark_col, type_col,
                                   direction_column, amount_column, income_flag, expense_flag)
         
         return result_data
     
-    def _basic_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series, 
-                          summary_col: pd.Series, remark_col: pd.Series,
-                          direction_column: str, amount_column: str, 
+    def _basic_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series,
+                          summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
+                          direction_column: str, amount_column: str,
                           income_flag: str, expense_flag: str):
         """基础识别算法"""
         # 构建正则表达式模式
@@ -135,50 +137,54 @@ class CashRecognitionEngine:
         # 存现识别
         deposit_mask = empty_opposite_mask & (
             (summary_col.str.contains(deposit_pattern, case=False, na=False)) |
-            (remark_col.str.contains(deposit_pattern, case=False, na=False))
+            (remark_col.str.contains(deposit_pattern, case=False, na=False)) |
+            (type_col.str.contains(deposit_pattern, case=False, na=False))
         ) & (data[direction_column] == income_flag)
-        
+
         if deposit_exclude_pattern:
             deposit_mask = deposit_mask & ~(
                 (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
-                (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False))
+                (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(deposit_exclude_pattern, case=False, na=False))
             )
-        
+
         data.loc[deposit_mask, '存取现标识'] = '存现'
         data.loc[deposit_mask, '收入金额'] = data.loc[deposit_mask, amount_column].abs()
-        
+
         # 取现识别
         remaining_mask = ~deposit_mask & empty_opposite_mask
         withdraw_mask = remaining_mask & (
             (summary_col.str.contains(withdraw_pattern, case=False, na=False)) |
-            (remark_col.str.contains(withdraw_pattern, case=False, na=False))
+            (remark_col.str.contains(withdraw_pattern, case=False, na=False)) |
+            (type_col.str.contains(withdraw_pattern, case=False, na=False))
         ) & (data[direction_column] == expense_flag)
-        
+
         if withdraw_exclude_pattern:
             withdraw_mask = withdraw_mask & ~(
                 (summary_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
-                (remark_col.str.contains(withdraw_exclude_pattern, case=False, na=False))
+                (remark_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(withdraw_exclude_pattern, case=False, na=False))
             )
-        
+
         data.loc[withdraw_mask, '存取现标识'] = '取现'
         data.loc[withdraw_mask, '支出金额'] = data.loc[withdraw_mask, amount_column].abs()
     
     def _enhanced_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series,
-                            summary_col: pd.Series, remark_col: pd.Series,
+                            summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
                             direction_column: str, amount_column: str,
                             income_flag: str, expense_flag: str):
         """增强识别算法"""
         # 1. 高优先级精确匹配
-        self._high_priority_recognition(data, empty_opposite_mask, summary_col, remark_col,
+        self._high_priority_recognition(data, empty_opposite_mask, summary_col, remark_col, type_col,
                                       direction_column, amount_column, income_flag, expense_flag)
-        
+
         # 2. 中优先级模糊匹配
-        self._medium_priority_recognition(data, empty_opposite_mask, summary_col, remark_col,
+        self._medium_priority_recognition(data, empty_opposite_mask, summary_col, remark_col, type_col,
                                         direction_column, amount_column, income_flag, expense_flag)
-        
+
         # 3. 低优先级上下文分析
         if self.enable_fuzzy_matching:
-            self._low_priority_recognition(data, empty_opposite_mask, summary_col, remark_col,
+            self._low_priority_recognition(data, empty_opposite_mask, summary_col, remark_col, type_col,
                                          direction_column, amount_column, income_flag, expense_flag)
         
         # 4. 智能金额分析
@@ -186,7 +192,7 @@ class CashRecognitionEngine:
             self._amount_based_analysis(data, amount_column)
     
     def _high_priority_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series,
-                                 summary_col: pd.Series, remark_col: pd.Series,
+                                 summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
                                  direction_column: str, amount_column: str,
                                  income_flag: str, expense_flag: str):
         """高优先级精确匹配识别"""
@@ -194,22 +200,24 @@ class CashRecognitionEngine:
         for keyword in self.high_priority_deposit_keywords:
             mask = empty_opposite_mask & (
                 (summary_col.str.contains(keyword, case=False, na=False)) |
-                (remark_col.str.contains(keyword, case=False, na=False))
+                (remark_col.str.contains(keyword, case=False, na=False)) |
+                (type_col.str.contains(keyword, case=False, na=False))
             ) & (data[direction_column] == income_flag)
-            
+
             if mask.any():
                 data.loc[mask, '存取现标识'] = '存现'
                 data.loc[mask, '收入金额'] = data.loc[mask, amount_column].abs()
                 data.loc[mask, '识别置信度'] = self.high_priority_confidence
                 data.loc[mask, '识别原因'] = f'高优先级关键词匹配: {keyword}'
-        
+
         # 取现高优先级匹配
         for keyword in self.high_priority_withdraw_keywords:
             mask = empty_opposite_mask & (
                 (summary_col.str.contains(keyword, case=False, na=False)) |
-                (remark_col.str.contains(keyword, case=False, na=False))
+                (remark_col.str.contains(keyword, case=False, na=False)) |
+                (type_col.str.contains(keyword, case=False, na=False))
             ) & (data[direction_column] == expense_flag) & (data['存取现标识'] == '转账')
-            
+
             if mask.any():
                 data.loc[mask, '存取现标识'] = '取现'
                 data.loc[mask, '支出金额'] = data.loc[mask, amount_column].abs()
@@ -217,57 +225,141 @@ class CashRecognitionEngine:
                 data.loc[mask, '识别原因'] = f'高优先级关键词匹配: {keyword}'
     
     def _medium_priority_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series,
-                                   summary_col: pd.Series, remark_col: pd.Series,
+                                   summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
                                    direction_column: str, amount_column: str,
                                    income_flag: str, expense_flag: str):
-        """中优先级模糊匹配识别"""
+        """中优先级识别：先过滤转账，再筛选存取现"""
         # 构建正则表达式模式
         deposit_pattern = '|'.join(self.deposit_keywords) if self.deposit_keywords else ''
         deposit_exclude_pattern = '|'.join(self.deposit_exclude_keywords) if self.deposit_exclude_keywords else ''
         withdraw_pattern = '|'.join(self.withdraw_keywords) if self.withdraw_keywords else ''
         withdraw_exclude_pattern = '|'.join(self.withdraw_exclude_keywords) if self.withdraw_exclude_keywords else ''
-        
+
         if not deposit_pattern or not withdraw_pattern:
             return
-        
-        # 存现中优先级匹配
-        deposit_mask = empty_opposite_mask & (
-            (summary_col.str.contains(deposit_pattern, case=False, na=False)) |
-            (remark_col.str.contains(deposit_pattern, case=False, na=False))
-        ) & (data[direction_column] == income_flag) & (data['存取现标识'] == '转账')
-        
+
+        # 存现识别：先过滤转账，再筛选存现关键词
+        # 第1步：基础条件筛选（对方姓名为空 + 借贷标识为贷）
+        deposit_base_mask = empty_opposite_mask & (data[direction_column] == income_flag) & (data['存取现标识'] == '转账')
+
+        # 第2步：过滤转账相关交易
         if deposit_exclude_pattern:
-            deposit_mask = deposit_mask & ~(
+            deposit_candidate_mask = deposit_base_mask & ~(
                 (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
-                (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False))
+                (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(deposit_exclude_pattern, case=False, na=False))
             )
-        
+        else:
+            deposit_candidate_mask = deposit_base_mask
+
+        # 第3步：从候选中筛选包含存现关键词的交易
+        deposit_mask = deposit_candidate_mask & (
+            (summary_col.str.contains(deposit_pattern, case=False, na=False)) |
+            (remark_col.str.contains(deposit_pattern, case=False, na=False)) |
+            (type_col.str.contains(deposit_pattern, case=False, na=False))
+        )
+
         if deposit_mask.any():
             data.loc[deposit_mask, '存取现标识'] = '存现'
             data.loc[deposit_mask, '收入金额'] = data.loc[deposit_mask, amount_column].abs()
             data.loc[deposit_mask, '识别置信度'] = self.medium_priority_confidence
             data.loc[deposit_mask, '识别原因'] = '中优先级关键词匹配'
-        
-        # 取现中优先级匹配
-        withdraw_mask = empty_opposite_mask & (
-            (summary_col.str.contains(withdraw_pattern, case=False, na=False)) |
-            (remark_col.str.contains(withdraw_pattern, case=False, na=False))
-        ) & (data[direction_column] == expense_flag) & (data['存取现标识'] == '转账')
-        
+
+        # 取现识别：先过滤转账，再筛选取现关键词
+        # 第1步：基础条件筛选（对方姓名为空 + 借贷标识为借）
+        withdraw_base_mask = empty_opposite_mask & (data[direction_column] == expense_flag) & (data['存取现标识'] == '转账')
+
+        # 第2步：过滤转账相关交易
         if withdraw_exclude_pattern:
-            withdraw_mask = withdraw_mask & ~(
+            withdraw_candidate_mask = withdraw_base_mask & ~(
                 (summary_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
-                (remark_col.str.contains(withdraw_exclude_pattern, case=False, na=False))
+                (remark_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(withdraw_exclude_pattern, case=False, na=False))
             )
-        
+        else:
+            withdraw_candidate_mask = withdraw_base_mask
+
+        # 第3步：从候选中筛选包含取现关键词的交易
+        withdraw_mask = withdraw_candidate_mask & (
+            (summary_col.str.contains(withdraw_pattern, case=False, na=False)) |
+            (remark_col.str.contains(withdraw_pattern, case=False, na=False)) |
+            (type_col.str.contains(withdraw_pattern, case=False, na=False))
+        )
+
         if withdraw_mask.any():
             data.loc[withdraw_mask, '存取现标识'] = '取现'
             data.loc[withdraw_mask, '支出金额'] = data.loc[withdraw_mask, amount_column].abs()
             data.loc[withdraw_mask, '识别置信度'] = self.medium_priority_confidence
             data.loc[withdraw_mask, '识别原因'] = '中优先级关键词匹配'
 
+        # ATM智能识别：先过滤转账，再识别ATM存取现
+        self._atm_smart_recognition(data, empty_opposite_mask, summary_col, remark_col, type_col,
+                                  direction_column, amount_column, income_flag, expense_flag,
+                                  deposit_exclude_pattern, withdraw_exclude_pattern)
+
+    def _atm_smart_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series,
+                             summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
+                             direction_column: str, amount_column: str,
+                             income_flag: str, expense_flag: str,
+                             deposit_exclude_pattern: str, withdraw_exclude_pattern: str):
+        """ATM智能识别：先过滤转账，再识别ATM存取现"""
+
+        # ATM存现识别：先过滤转账，再筛选ATM
+        # 第1步：基础条件筛选（对方姓名为空 + 借贷标识为贷）
+        atm_deposit_base_mask = empty_opposite_mask & (data[direction_column] == income_flag) & (data['存取现标识'] == '转账')
+
+        # 第2步：过滤转账相关交易
+        if deposit_exclude_pattern:
+            atm_deposit_candidate_mask = atm_deposit_base_mask & ~(
+                (summary_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                (remark_col.str.contains(deposit_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(deposit_exclude_pattern, case=False, na=False))
+            )
+        else:
+            atm_deposit_candidate_mask = atm_deposit_base_mask
+
+        # 第3步：从候选中筛选包含ATM的交易
+        atm_deposit_mask = atm_deposit_candidate_mask & (
+            (summary_col.str.contains('ATM', case=False, na=False)) |
+            (remark_col.str.contains('ATM', case=False, na=False)) |
+            (type_col.str.contains('ATM', case=False, na=False))
+        )
+
+        if atm_deposit_mask.any():
+            data.loc[atm_deposit_mask, '存取现标识'] = '存现'
+            data.loc[atm_deposit_mask, '收入金额'] = data.loc[atm_deposit_mask, amount_column].abs()
+            data.loc[atm_deposit_mask, '识别置信度'] = self.medium_priority_confidence
+            data.loc[atm_deposit_mask, '识别原因'] = 'ATM智能识别-存现'
+
+        # ATM取现识别：先过滤转账，再筛选ATM
+        # 第1步：基础条件筛选（对方姓名为空 + 借贷标识为借）
+        atm_withdraw_base_mask = empty_opposite_mask & (data[direction_column] == expense_flag) & (data['存取现标识'] == '转账')
+
+        # 第2步：过滤转账相关交易
+        if withdraw_exclude_pattern:
+            atm_withdraw_candidate_mask = atm_withdraw_base_mask & ~(
+                (summary_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
+                (remark_col.str.contains(withdraw_exclude_pattern, case=False, na=False)) |
+                (type_col.str.contains(withdraw_exclude_pattern, case=False, na=False))
+            )
+        else:
+            atm_withdraw_candidate_mask = atm_withdraw_base_mask
+
+        # 第3步：从候选中筛选包含ATM的交易
+        atm_withdraw_mask = atm_withdraw_candidate_mask & (
+            (summary_col.str.contains('ATM', case=False, na=False)) |
+            (remark_col.str.contains('ATM', case=False, na=False)) |
+            (type_col.str.contains('ATM', case=False, na=False))
+        )
+
+        if atm_withdraw_mask.any():
+            data.loc[atm_withdraw_mask, '存取现标识'] = '取现'
+            data.loc[atm_withdraw_mask, '支出金额'] = data.loc[atm_withdraw_mask, amount_column].abs()
+            data.loc[atm_withdraw_mask, '识别置信度'] = self.medium_priority_confidence
+            data.loc[atm_withdraw_mask, '识别原因'] = 'ATM智能识别-取现'
+
     def _low_priority_recognition(self, data: pd.DataFrame, empty_opposite_mask: pd.Series,
-                                summary_col: pd.Series, remark_col: pd.Series,
+                                summary_col: pd.Series, remark_col: pd.Series, type_col: pd.Series,
                                 direction_column: str, amount_column: str,
                                 income_flag: str, expense_flag: str):
         """低优先级上下文分析识别"""
@@ -283,7 +375,8 @@ class CashRecognitionEngine:
         # 模糊匹配：包含"现"字但不在排除列表中
         fuzzy_cash_mask = empty_opposite_mask & (
             (summary_col.str.contains('现', case=False, na=False)) |
-            (remark_col.str.contains('现', case=False, na=False))
+            (remark_col.str.contains('现', case=False, na=False)) |
+            (type_col.str.contains('现', case=False, na=False))
         ) & (data['存取现标识'] == '转账')
 
         # 存现模糊匹配

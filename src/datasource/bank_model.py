@@ -157,6 +157,7 @@ class BankDataModel(BaseDataModel):
             'opposite_name_column': self.opposite_name_column,
             'summary_column': self.summary_column,
             'remark_column': self.remark_column,
+            'type_column': getattr(self, 'type_column', None),
             'direction_column': self.direction_column,
             'amount_column': self.amount_column,
             'income_flag': self.income_flag,

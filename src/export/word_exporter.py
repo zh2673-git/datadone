@@ -420,6 +420,9 @@ class WordExporter:
                 bank_names.update(bank_model.data[bank_model.bank_name_column].dropna().unique())
         doc.add_paragraph(f"所涉银行名称: {', '.join(sorted(list(bank_names))) if bank_names else '无'}")
 
+        # 添加技术室制作说明
+        doc.add_paragraph("技术室制作本报告仅节选部分数据，更多数据可参考做好分类的完整表格。")
+
     def generate_person_bank_analysis(self, doc: Document, person_name: str, analyzer):
         doc.add_heading('银行资金分析', level=4)
         person_data = analyzer.bank_model.get_data_by_person(person_name)
@@ -460,6 +463,11 @@ class WordExporter:
             self._generate_special_amount_summary(doc, person_name, analyzer, special_amounts_df, "银行", section_num)
             section_num += 1
             has_content = True
+
+        # 重点收支分析
+        self._generate_key_transactions_summary(doc, person_name, analyzer, person_data, section_num)
+        section_num += 1
+        has_content = True
         
         if not has_content:
              doc.add_paragraph(f"未找到 {person_name} 的有效银行交易数据。")
@@ -796,6 +804,185 @@ class WordExporter:
                     p.add_run("、")
             
             p.add_run("。")
+
+    def _generate_key_transactions_summary(self, doc: Document, person_name: str, analyzer, person_data: pd.DataFrame, section_num: int):
+        """生成重点收支分析的概要段落"""
+        try:
+            # 导入重点收支识别引擎
+            from src.utils.key_transactions import KeyTransactionEngine
+
+            # 初始化重点收支识别引擎
+            key_engine = KeyTransactionEngine(analyzer.config)
+
+            if not key_engine.enabled:
+                return
+
+            # 识别重点收支
+            key_data = key_engine.identify_key_transactions(
+                person_data,
+                analyzer.bank_model.summary_column,
+                analyzer.bank_model.remark_column,
+                analyzer.bank_model.type_column,
+                analyzer.bank_model.amount_column,
+                analyzer.bank_model.opposite_name_column
+            )
+
+            # 筛选出重点收支数据
+            key_transactions = key_data[key_data['是否重点收支']].copy()
+
+            if key_transactions.empty:
+                return
+
+            # 生成统计信息
+            key_stats = key_engine.generate_statistics(
+                key_data,
+                analyzer.bank_model.name_column,
+                analyzer.bank_model.amount_column,
+                analyzer.bank_model.date_column,
+                analyzer.bank_model.opposite_name_column
+            )
+
+            if key_stats.empty:
+                return
+
+            person_stats = key_stats[key_stats['姓名'] == person_name]
+            if person_stats.empty:
+                return
+
+            stats = person_stats.iloc[0]
+
+            # 检查是否有任何重点收支数据
+            work_income_total = stats.get('工作收入总额', 0)
+            work_income_count = stats.get('工作收入次数', 0)
+            work_units_count = stats.get('可能工作单位数', 0)
+            work_units = stats.get('可能工作单位', '')
+            asset_income_total = stats.get('资产收入总额', 0)
+            large_income_total = stats.get('大额收入总额', 0)
+            large_expense_total = stats.get('大额支出总额', 0)
+
+            # 如果没有任何重点收支，则不显示这个段落
+            if (work_income_total == 0 and asset_income_total == 0 and
+                large_income_total == 0 and large_expense_total == 0):
+                return
+
+            # 生成重点收支概要段落
+            p = doc.add_paragraph()
+            p.add_run(f"{section_num}、重点收支：").bold = True
+
+            # 工作收入部分
+            if work_income_total > 0:
+                time_range = stats.get('时间范围', '')
+                # 工作收入相关内容加粗显示
+                work_run = p.add_run(f"工作收入总额{work_income_total:,.2f}元（{time_range}，{work_income_count}次）")
+                work_run.bold = True
+                p.add_run("，")
+
+                if work_units_count > 0:
+                    if work_units_count == 1:
+                        unit_run = p.add_run(f"可能工作单位有{work_units_count}个（{work_units}）")
+                        unit_run.bold = True
+                        p.add_run("；")
+                    else:
+                        # 如果有多个单位，显示前3个
+                        units_list = work_units.split('、')[:3]
+                        units_display = '、'.join(units_list)
+                        if work_units_count > 3:
+                            units_display += f"等{work_units_count}个"
+                        unit_run = p.add_run(f"可能工作单位有{work_units_count}个（{units_display}）")
+                        unit_run.bold = True
+                        p.add_run("；")
+                else:
+                    p.add_run("工作单位信息不明确；")
+
+            # 资产收入部分
+            asset_income_total = stats.get('资产收入总额', 0)
+            if asset_income_total > 0:
+                time_range = stats.get('时间范围', '')
+                property_count = stats.get('房产收入次数', 0)
+                rental_count = stats.get('租金收入次数', 0)
+                vehicle_count = stats.get('车辆收入次数', 0)
+                securities_count = stats.get('证券收入次数', 0)
+
+                p.add_run(f"资产收入{asset_income_total:,.2f}元（{time_range}，")
+
+                asset_details = []
+                # 房产相关加粗
+                if property_count > 0:
+                    property_run = p.add_run(f"疑似卖房{property_count}次")
+                    property_run.bold = True
+                    asset_details.append("property")
+
+                # 租金相关加粗（房产相关）
+                if rental_count > 0:
+                    if asset_details:
+                        p.add_run("、")
+                    rental_run = p.add_run(f"收租{rental_count}次")
+                    rental_run.bold = True
+                    asset_details.append("rental")
+
+                # 车辆相关加粗
+                if vehicle_count > 0:
+                    if asset_details:
+                        p.add_run("、")
+                    vehicle_run = p.add_run(f"疑似卖车{vehicle_count}次")
+                    vehicle_run.bold = True
+                    asset_details.append("vehicle")
+
+                # 证券不加粗
+                if securities_count > 0:
+                    if asset_details:
+                        p.add_run("、")
+                    p.add_run(f"证券{securities_count}次")
+                    asset_details.append("securities")
+
+                if not asset_details:
+                    p.add_run("其他资产收入")
+
+                p.add_run("）；")
+
+            # 大额收入部分
+            large_income_total = stats.get('大额收入总额', 0)
+            if large_income_total > 0:
+                level1_count = stats.get('大额收入_10万-50万_次数', 0)
+                level2_count = stats.get('大额收入_50万-100万_次数', 0)
+                level3_count = stats.get('大额收入_100万及以上_次数', 0)
+
+                large_income_details = []
+                if level1_count > 0:
+                    large_income_details.append(f"10万-50万{level1_count}次")
+                if level2_count > 0:
+                    large_income_details.append(f"50万-100万{level2_count}次")
+                if level3_count > 0:
+                    large_income_details.append(f"100万及以上{level3_count}次")
+
+                if large_income_details:
+                    large_income_str = '；'.join(large_income_details)
+                    p.add_run(f"大额收入总额{large_income_total:,.2f}元（{large_income_str}）；")
+
+            # 大额支出部分
+            large_expense_total = stats.get('大额支出总额', 0)
+            if large_expense_total > 0:
+                level1_count = stats.get('大额支出_10万-50万_次数', 0)
+                level2_count = stats.get('大额支出_50万-100万_次数', 0)
+                level3_count = stats.get('大额支出_100万及以上_次数', 0)
+
+                large_expense_details = []
+                if level1_count > 0:
+                    large_expense_details.append(f"10万-50万{level1_count}次")
+                if level2_count > 0:
+                    large_expense_details.append(f"50万-100万{level2_count}次")
+                if level3_count > 0:
+                    large_expense_details.append(f"100万及以上{level3_count}次")
+
+                if large_expense_details:
+                    large_expense_str = '；'.join(large_expense_details)
+                    p.add_run(f"大额支出总额{large_expense_total:,.2f}元（{large_expense_str}）。")
+
+        except Exception as e:
+            # 如果出现错误，记录日志但不影响报告生成
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"生成重点收支分析时出错: {e}", exc_info=True)
 
     def generate_comprehensive_cross_analysis_section(self, doc: Document, analyzers: Dict):
         doc.add_heading('三、综合交叉分析', level=2)

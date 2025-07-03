@@ -104,10 +104,13 @@ class ExcelExporter(BaseExporter):
                     self.logger.info("正在为银行数据添加额外的汇总表...")
                     bank_model = data_models['bank']
                     self.add_summary_sheets(writer, bank_model)
-                    
+
                     # 3. 若需要，添加原始数据表
                     if add_raw_data:
                         self.export_raw_bank_data(writer, bank_model)
+
+                    # 4. 添加重点收支数据表
+                    self.export_key_transactions(writer, bank_model)
 
             self.logger.info(f"所有分析结果已成功导出到: {filepath}")
             return filepath
@@ -272,8 +275,76 @@ class ExcelExporter(BaseExporter):
             worksheet = writer.sheets['取现数据(原始)']
             self._set_column_widths(worksheet, withdrawal_data)
             self._format_sheet(worksheet, withdrawal_data, writer.book)
-            
+
         self.logger.info("已添加原始数据表")
+
+    def export_key_transactions(self, writer: pd.ExcelWriter, bank_model: 'BankDataModel'):
+        """
+        导出重点收支数据到不同的sheet
+
+        Parameters:
+        -----------
+        writer : pd.ExcelWriter
+            Excel写入器对象
+        bank_model : BankDataModel
+            包含银行数据的模型
+        """
+        if not bank_model or bank_model.data.empty:
+            return
+
+        try:
+            # 导入重点收支识别引擎
+            from src.utils.key_transactions import KeyTransactionEngine
+
+            # 初始化重点收支识别引擎
+            key_engine = KeyTransactionEngine(self.config)
+
+            if not key_engine.enabled:
+                self.logger.info("重点收支识别功能已禁用，跳过重点收支数据导出")
+                return
+
+            # 识别重点收支
+            key_data = key_engine.identify_key_transactions(
+                bank_model.data,
+                bank_model.summary_column,
+                bank_model.remark_column,
+                bank_model.type_column,
+                bank_model.amount_column,
+                bank_model.opposite_name_column
+            )
+
+            # 筛选出重点收支数据
+            key_transactions = key_data[key_data['是否重点收支']].copy()
+
+            if not key_transactions.empty:
+                # 导出重点收支原始数据
+                key_transactions.to_excel(writer, sheet_name='重点收支(原始)', index=False)
+                worksheet = writer.sheets['重点收支(原始)']
+                self._set_column_widths(worksheet, key_transactions)
+                self._format_sheet(worksheet, key_transactions, writer.book)
+
+                # 生成重点收支统计数据
+                key_stats = key_engine.generate_statistics(
+                    key_data,
+                    bank_model.name_column,
+                    bank_model.amount_column,
+                    bank_model.date_column,
+                    bank_model.opposite_name_column
+                )
+
+                if not key_stats.empty:
+                    # 导出重点收支统计数据
+                    key_stats.to_excel(writer, sheet_name='重点收支(统计)', index=False)
+                    worksheet = writer.sheets['重点收支(统计)']
+                    self._set_column_widths(worksheet, key_stats)
+                    self._format_sheet(worksheet, key_stats, writer.book)
+
+                self.logger.info(f"已添加重点收支数据表，原始数据 {len(key_transactions)} 笔，统计数据 {len(key_stats)} 人")
+            else:
+                self.logger.info("未发现重点收支数据，跳过重点收支数据导出")
+
+        except Exception as e:
+            self.logger.error(f"导出重点收支数据时出错: {e}", exc_info=True)
 
     def _set_column_widths(self, worksheet, df: pd.DataFrame):
         """

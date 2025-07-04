@@ -421,8 +421,7 @@ class WordExporter:
                 bank_names.update(bank_model.data[bank_model.bank_name_column].dropna().unique())
         doc.add_paragraph(f"所涉银行名称: {', '.join(sorted(list(bank_names))) if bank_names else '无'}")
 
-        # 添加技术室制作说明
-        doc.add_paragraph("技术室制作本报告仅节选部分数据，更多数据可参考做好分类的完整表格。")
+
 
     def generate_person_bank_analysis(self, doc: Document, person_name: str, analyzer):
         doc.add_heading('银行资金分析', level=4)
@@ -639,17 +638,15 @@ class WordExporter:
         p.add_run(f"{section_num}、{analysis_type_str}概览").bold = True
         p.add_run(f"：在 {time_span_str} 期间，总收入 {total_income:.2f} 元，总支出 {total_expense:.2f} 元，")
         p.add_run(f"净流水 {net_flow:.2f} 元，共计 {total_transactions_count} 笔交易。")
-        
-        doc.add_paragraph(f"主要时间集中在：{major_time_str}。")
-        doc.add_paragraph(f'单笔主要金额：{top_single_amounts}。')
-        
+        p.add_run(f"主要时间集中在：{major_time_str}。")
+        p.add_run(f'单笔主要金额：{top_single_amounts}。')
+
         if abs(most_frequent_amount) > 5000:
-            p = doc.add_paragraph()
             p.add_run('重复最多的金额为 ')
             p.add_run(f'{most_frequent_amount_info}').bold = True
             p.add_run('。')
         else:
-            doc.add_paragraph(f'重复最多的金额为 {most_frequent_amount_info}。')
+            p.add_run(f'重复最多的金额为 {most_frequent_amount_info}。')
 
     def _generate_cash_summary_paragraph(self, doc: Document, person_name: str, cash_df: pd.DataFrame, cash_type: str, bank_model, section_num: int):
         """生成存取现分析的概要段落"""
@@ -686,23 +683,22 @@ class WordExporter:
             monthly_counts = person_cash_data.groupby('年份月份').size().reset_index(name='次数')
             top_months = monthly_counts.nlargest(3, '次数')
             major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
-            doc.add_paragraph(f"主要时间集中在：{major_time_str}。")
+            p.add_run(f"主要时间集中在：{major_time_str}。")
 
             # 单笔主要金额（重复最多的金额）
             amount_counts = person_cash_data[bank_model.amount_column].abs().value_counts()
             if not amount_counts.empty:
                 most_frequent_amount = amount_counts.index[0]
                 most_frequent_count = amount_counts.iloc[0]
-                
-                # 创建段落
-                p = doc.add_paragraph()
+
+                # 在同一段落中添加
                 p.add_run("单笔主要金额：")
-                
+
                 # 如果金额大于等于10000元，加粗显示
                 amount_run = p.add_run(f"{most_frequent_amount:.2f}元 ({most_frequent_count}次)")
                 if most_frequent_amount >= 10000:
                     amount_run.bold = True
-                    
+
                 p.add_run("。")
 
             # 单笔金额前五名
@@ -734,11 +730,11 @@ class WordExporter:
                     summary = row[bank_model.summary_column]
                     row_cells[3].text = str(summary) if pd.notna(summary) else 'N/A'
         else:
-            # 对于"取现"，只显示单笔最高金额
+            # 对于"取现"，只显示单笔最高金额，不换行
             top_transaction = person_cash_data.loc[person_cash_data[bank_model.amount_column].abs().idxmax()]
             top_amount = top_transaction[bank_model.amount_column]
             top_date = top_transaction[bank_model.date_column].strftime('%Y年%m月%d日')
-            doc.add_paragraph(f"其中，单笔最高{cash_type}金额为 {abs(top_amount):.2f}元，发生于{top_date}。")
+            p.add_run(f"其中，单笔最高{cash_type}金额为 {abs(top_amount):.2f}元，发生于{top_date}。")
 
     def _generate_special_amount_summary(self, doc: Document, person_name: str, analyzer, special_amounts_df: pd.DataFrame, analysis_type_str: str, section_num: int):
         """生成特殊金额分析的概要段落"""
@@ -1226,14 +1222,16 @@ class WordExporter:
         # 工作收入部分
         if work_income_total > 0:
             time_range = stats.get('时间范围', '')
-            work_income_run = p.add_run(f"工作收入总额{work_income_total:,.2f}元（{time_range}，{work_income_count}次）")
-            work_income_run.bold = True
+            work_income_run = p.add_run("工作收入")
+            work_income_run.underline = True
+            p.add_run(f"总额{work_income_total:,.2f}元（{time_range}，{work_income_count}次）")
 
             # 工作单位信息
             if work_units_count > 0:
-                p.add_run("，可能工作单位有")
-                units_run = p.add_run(f"{work_units_count}个")
-                units_run.bold = True
+                p.add_run("，")
+                units_run = p.add_run("可能工作单位")
+                units_run.underline = True
+                p.add_run(f"有{work_units_count}个")
 
                 if work_units:
                     p.add_run(f"（{work_units}）")
@@ -1248,28 +1246,30 @@ class WordExporter:
             vehicle_income_count = stats.get('车辆收入次数', 0)
             securities_income_count = stats.get('证券收入次数', 0)
 
-            p.add_run(f"资产收入{asset_income_total:,.2f}元（{time_range}，")
+            asset_income_run = p.add_run("资产收入")
+            asset_income_run.underline = True
+            p.add_run(f"{asset_income_total:,.2f}元（{time_range}，")
 
             asset_income_details = []
-            # 房产相关加粗
+            # 房产相关
             if property_count > 0:
-                property_run = p.add_run(f"卖房{property_count}次")
+                property_run = p.add_run(f"与房有关{property_count}次")
                 property_run.bold = True
                 asset_income_details.append("property")
 
-            # 租金相关加粗（房产相关）
+            # 租金相关（房产相关）
             if rental_count > 0:
                 if asset_income_details:
                     p.add_run("、")
-                rental_run = p.add_run(f"收租{rental_count}次")
+                rental_run = p.add_run(f"与租金有关{rental_count}次")
                 rental_run.bold = True
                 asset_income_details.append("rental")
 
-            # 车辆收入相关加粗
+            # 车辆收入相关
             if vehicle_income_count > 0:
                 if asset_income_details:
                     p.add_run("、")
-                vehicle_income_run = p.add_run(f"卖车{vehicle_income_count}次")
+                vehicle_income_run = p.add_run(f"与车有关{vehicle_income_count}次")
                 vehicle_income_run.bold = True
                 asset_income_details.append("vehicle_income")
 
@@ -1293,28 +1293,30 @@ class WordExporter:
             rental_expense_count = stats.get('租金支出次数', 0)
             securities_expense_count = stats.get('证券支出次数', 0)
 
-            p.add_run(f"资产支出{asset_expense_total:,.2f}元（{time_range}，")
+            asset_expense_run = p.add_run("资产支出")
+            asset_expense_run.underline = True
+            p.add_run(f"{asset_expense_total:,.2f}元（{time_range}，")
 
             asset_expense_details = []
-            # 房产支出相关加粗
+            # 房产支出相关
             if property_expense_count > 0:
-                property_expense_run = p.add_run(f"买房{property_expense_count}次")
+                property_expense_run = p.add_run(f"与房有关{property_expense_count}次")
                 property_expense_run.bold = True
                 asset_expense_details.append("property_expense")
 
-            # 车辆支出相关加粗
+            # 车辆支出相关
             if vehicle_expense_count > 0:
                 if asset_expense_details:
                     p.add_run("、")
-                vehicle_expense_run = p.add_run(f"买车{vehicle_expense_count}次")
+                vehicle_expense_run = p.add_run(f"与车有关{vehicle_expense_count}次")
                 vehicle_expense_run.bold = True
                 asset_expense_details.append("vehicle_expense")
 
-            # 租金支出相关加粗
+            # 租金支出相关
             if rental_expense_count > 0:
                 if asset_expense_details:
                     p.add_run("、")
-                rental_expense_run = p.add_run(f"承租{rental_expense_count}次")
+                rental_expense_run = p.add_run(f"与租金有关{rental_expense_count}次")
                 rental_expense_run.bold = True
                 asset_expense_details.append("rental_expense")
 
@@ -1336,8 +1338,9 @@ class WordExporter:
             large_income_50_100 = stats.get('大额收入_50万-100万_次数', 0)
             large_income_100_plus = stats.get('大额收入_100万及以上_次数', 0)
 
-            large_income_run = p.add_run(f"大额收入总额{large_income_total:,.2f}元（")
-            large_income_run.bold = True
+            large_income_run = p.add_run("大额收入")
+            large_income_run.underline = True
+            p.add_run(f"总额{large_income_total:,.2f}元（")
 
             income_details = []
             if large_income_10_50 > 0:
@@ -1356,8 +1359,9 @@ class WordExporter:
             large_expense_50_100 = stats.get('大额支出_50万-100万_次数', 0)
             large_expense_100_plus = stats.get('大额支出_100万及以上_次数', 0)
 
-            large_expense_run = p.add_run(f"大额支出总额{large_expense_total:,.2f}元（")
-            large_expense_run.bold = True
+            large_expense_run = p.add_run("大额支出")
+            large_expense_run.underline = True
+            p.add_run(f"总额{large_expense_total:,.2f}元（")
 
             expense_details = []
             if large_expense_10_50 > 0:

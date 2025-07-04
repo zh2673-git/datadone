@@ -48,12 +48,12 @@ class CommandLineInterface(BaseInterface):
         # 初始化结果
         self.analysis_results: Dict[str, pd.DataFrame] = {}
         
-        # 初始化导出器
-        self.excel_exporter = ExcelExporter()
-        self.word_exporter = WordExporter()
-        
         # 初始化配置
         self.config = config or Config()
+
+        # 初始化导出器
+        self.excel_exporter = ExcelExporter(config=self.config)
+        self.word_exporter = WordExporter(config=self.config)
         self.logger = logging.getLogger('main')
         
         # 如果启用了热重载，则启动监控

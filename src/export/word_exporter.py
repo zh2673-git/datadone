@@ -779,12 +779,13 @@ class WordExporter:
             
             for amount in top_other_amounts:
                 abs_amount = abs(amount)
-                # 收集该金额下所有不同的对手方和次数
+                # 收集该金额下所有不同的对手方和次数，但最多只显示3个
                 amount_txns = special_amounts_df[special_amounts_df[amount_col].abs() == abs_amount]
                 if not amount_txns.empty:
                     opponents_count = amount_txns[opponent_col].value_counts()
                     opponents_list = []
-                    for opponent, count in opponents_count.items():
+                    # 只取前3个对手方
+                    for opponent, count in opponents_count.head(3).items():
                         if pd.notna(opponent):
                             opponents_list.append(f"{str(opponent)}，{count}次")
                         else:
@@ -930,14 +931,13 @@ class WordExporter:
             # 在去重后的结果中，筛选出至少在两个不同类型数据中都出现过的对手方
             display_df = deduplicated_df[deduplicated_df['关联数据源数量'] > 1]
 
-        # 按本方姓名排序，然后按关联数据源数量降序排序，确保结果按人员分组显示
+        # 先按关联数据源数量全局排序，取前10条关联度最高的记录
         if '关联数据源数量' in display_df.columns:
+            display_df = display_df.sort_values(by='关联数据源数量', ascending=False).head(10)
+            # 然后按本方姓名排序，确保相同本方姓名的记录聚集在一起
             display_df = display_df.sort_values(by=['本方姓名', '关联数据源数量'], ascending=[True, False])
         else:
-            display_df = display_df.sort_values(by='本方姓名')
-
-        # 取前20条记录以确保每个人都有足够的展示
-        display_df = display_df.head(20)
+            display_df = display_df.sort_values(by='本方姓名').head(10)
 
         if display_df.empty:
             doc.add_paragraph("未发现显著关联的对手方。")
@@ -1006,8 +1006,8 @@ class WordExporter:
             '银行总金额', '微信总金额', '支付宝总金额', '通话次数'
         ]
         
-        # 按本方姓名分组显示，使表格更清晰
-        self._add_grouped_df_to_doc(doc, final_df[display_columns], group_by='本方姓名')
+        # 直接显示表格，相同本方姓名的记录会连续显示
+        self._add_df_to_doc(doc, final_df[display_columns])
 
     def _add_grouped_df_to_doc(self, doc: Document, df: pd.DataFrame, group_by: str):
         """

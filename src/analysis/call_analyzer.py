@@ -124,8 +124,13 @@ class CallAnalyzer(BaseAnalyzer):
         
         # 解决"对方姓名"为空导致整行被分组忽略的问题
         df[opposite_name_col] = df[opposite_name_col].fillna('未知')
-        # 解决"对方号码"为空的问题
-        df[opposite_number_col] = df[opposite_number_col].fillna('无号码')
+
+        # 安全地处理"对方号码"字段
+        if opposite_number_col in df.columns:
+            df[opposite_number_col] = df[opposite_number_col].fillna('无号码')
+        else:
+            # 如果没有对方号码字段，创建一个默认值
+            df[opposite_number_col] = '无号码'
 
         # 定义分组键, 按本方、对方、对方号码分组，实现逐行显示
         group_cols = [name_col, opposite_name_col, opposite_number_col]

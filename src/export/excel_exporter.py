@@ -82,47 +82,125 @@ class ExcelExporter(BaseExporter):
                 if include_unit_info and data_models and 'call' in data_models and data_models['call']:
                     company_position_map = self._extract_company_info(data_models['call'].data)
 
-                # 1. 写入所有基础分析结果
+                # 收集和分类分析结果
+                advanced_analysis_dfs = []
+                frequency_analysis_dfs = []
+                other_results = {}
+
                 for result_name, df in analysis_results.items():
                     if not self.validate_data(df):
                         continue
 
-                    # 若需要且可能，添加对方单位信息
+                    # 检查是否是高级分析结果，如果是则收集起来合并
+                    if any(pattern in result_name for pattern in ['时间模式分析', '金额模式分析', '异常交易检测', '个人交易模式']):
+                        # 添加数据来源信息
+                        df_copy = df.copy()
+                        df_copy['数据来源'] = result_name.split('_')[0] if '_' in result_name else '未知'
+                        advanced_analysis_dfs.append(df_copy)
+                        continue
+
+                    # 检查是否是频率分析结果，如果是则收集起来合并
+                    if '频率' in result_name:
+                        # 添加平台信息
+                        df_copy = df.copy()
+                        if '通话频率' in result_name:
+                            platform = '话单'
+                            df_copy['平台'] = platform
+                            df_copy['数据来源'] = result_name.split('_')[0] if '_' in result_name else '未知'
+                            # 话单类频率表单独处理
+                            df_copy = self._standardize_call_frequency_table(df_copy)
+                        else:
+                            # 账单类频率表
+                            if 'Wechat' in result_name or '微信' in result_name:
+                                platform = '微信'
+                            elif 'Alipay' in result_name or '支付宝' in result_name:
+                                platform = '支付宝'
+                            else:
+                                platform = '银行'
+
+                            df_copy['平台'] = platform
+                            df_copy['数据来源'] = result_name.split('_')[0] if '_' in result_name else '未知'
+                            # 统一频率表的字段结构并添加占比字段
+                            df_copy = self._standardize_frequency_table(df_copy)
+
+                        frequency_analysis_dfs.append(df_copy)
+                        continue
+
+                    # 检查是否是以XX为基准的综合分析结果，如果是则跳过（因为已有综合分析总表）
+                    if '综合分析_以' in result_name and '为基准' in result_name:
+                        self.logger.info(f"跳过冗余的综合分析表: {result_name}")
+                        continue
+
+                    # 其他分析结果
                     if include_unit_info and '对方姓名' in df.columns:
                         df = self._add_company_info(df, company_position_map)
+                    other_results[result_name] = df
 
-                    clean_sheet_name = self._sanitize_sheet_name(result_name)
-                    df.to_excel(writer, sheet_name=clean_sheet_name, index=False)
-                    worksheet = writer.sheets[clean_sheet_name]
-                    self._set_column_widths(worksheet, df)
-                    self._format_sheet(worksheet, df, writer.book)
-                
-                self.logger.info(f"已将 {len(analysis_results)} 个分析结果写入 sheets")
+                # 按照指定顺序生成Excel表：分析汇总、频率（账单类、话单类分开）、综合分析、银行分析原始、微信分析原始、支付宝分析原始、高级分析
 
-                # 2. 写入特定数据源的汇总和原始数据
-                if add_summaries and data_models and 'bank' in data_models and data_models['bank']:
-                    self.logger.info("正在为银行数据添加额外的汇总表...")
-                    bank_model = data_models['bank']
-                    self.add_summary_sheets(writer, bank_model)
+                # 1. 分析汇总表
+                if add_summaries:
+                    self.logger.info("正在生成分析汇总表...")
+                    self.add_comprehensive_summary_sheets(writer, data_models)
 
-                    # 3. 若需要，添加原始数据表
-                    if add_raw_data:
-                        self.export_raw_bank_data(writer, bank_model)
+                # 2. 频率表（账单类、话单类分开）
+                if frequency_analysis_dfs:
+                    # 分离话单类和账单类频率表
+                    call_frequency_dfs = [df for df in frequency_analysis_dfs if df['平台'].iloc[0] == '话单']
+                    bill_frequency_dfs = [df for df in frequency_analysis_dfs if df['平台'].iloc[0] != '话单']
 
-                    # 4. 添加重点收支数据表
-                    self.export_key_transactions(writer, bank_model, data_type='bank')
+                    # 生成账单类频率表
+                    if bill_frequency_dfs:
+                        combined_bill_df = pd.concat(bill_frequency_dfs, ignore_index=True)
+                        base_cols = ['平台', '数据来源', '本方姓名', '对方姓名']
+                        other_cols = [col for col in combined_bill_df.columns if col not in base_cols]
+                        final_cols = base_cols + other_cols
+                        combined_bill_df = combined_bill_df[[col for col in final_cols if col in combined_bill_df.columns]]
 
-                # 5. 为微信数据添加重点收支分析
-                if data_models and 'wechat' in data_models and data_models['wechat']:
-                    self.logger.info("正在为微信数据添加重点收支分析...")
-                    wechat_model = data_models['wechat']
-                    self.export_key_transactions(writer, wechat_model, data_type='wechat')
+                        combined_bill_df.to_excel(writer, sheet_name='账单类频率表', index=False)
+                        worksheet = writer.sheets['账单类频率表']
+                        self._set_column_widths(worksheet, combined_bill_df)
+                        self._format_sheet(worksheet, combined_bill_df, writer.book)
 
-                # 6. 为支付宝数据添加重点收支分析
-                if data_models and 'alipay' in data_models and data_models['alipay']:
-                    self.logger.info("正在为支付宝数据添加重点收支分析...")
-                    alipay_model = data_models['alipay']
-                    self.export_key_transactions(writer, alipay_model, data_type='alipay')
+                    # 生成话单类频率表
+                    if call_frequency_dfs:
+                        combined_call_df = pd.concat(call_frequency_dfs, ignore_index=True)
+                        base_cols = ['平台', '数据来源', '本方姓名', '对方姓名']
+                        other_cols = [col for col in combined_call_df.columns if col not in base_cols]
+                        final_cols = base_cols + other_cols
+                        combined_call_df = combined_call_df[[col for col in final_cols if col in combined_call_df.columns]]
+
+                        combined_call_df.to_excel(writer, sheet_name='话单类频率表', index=False)
+                        worksheet = writer.sheets['话单类频率表']
+                        self._set_column_widths(worksheet, combined_call_df)
+                        self._format_sheet(worksheet, combined_call_df, writer.book)
+
+                    # 3. 综合分析表（交叉分析）
+                    if call_frequency_dfs and bill_frequency_dfs:
+                        self._generate_comprehensive_analysis(writer, call_frequency_dfs, bill_frequency_dfs)
+
+                # 4. 平台原始数据表（银行分析原始、微信分析原始、支付宝分析原始）
+                if add_raw_data:
+                    self.logger.info("正在生成平台原始数据表...")
+                    self.export_platform_raw_data(writer, data_models, analysis_results)
+
+                # 5. 高级分析表（最后一个表格）
+                if advanced_analysis_dfs:
+                    combined_advanced_df = pd.concat(advanced_analysis_dfs, ignore_index=True)
+                    # 重新排列列的顺序，将数据来源放在前面
+                    if '数据来源' in combined_advanced_df.columns:
+                        cols = ['数据来源'] + [col for col in combined_advanced_df.columns if col != '数据来源']
+                        combined_advanced_df = combined_advanced_df[cols]
+
+                    combined_advanced_df.to_excel(writer, sheet_name='高级分析', index=False)
+                    worksheet = writer.sheets['高级分析']
+                    self._set_column_widths(worksheet, combined_advanced_df)
+                    self._format_sheet(worksheet, combined_advanced_df, writer.book)
+
+                # 注意：按照用户要求，高级分析之后的所有表格都不再生成
+                # 包括：其他分析结果、重点收支数据表等
+
+                self.logger.info(f"已按指定顺序生成核心分析表格，共 {len(analysis_results)} 个分析结果")
 
             self.logger.info(f"所有分析结果已成功导出到: {filepath}")
             return filepath
@@ -202,7 +280,7 @@ class ExcelExporter(BaseExporter):
 
     def add_summary_sheets(self, writer: pd.ExcelWriter, bank_model: 'BankDataModel'):
         """
-        添加存取现汇总和转账汇总总表。
+        添加分析汇总表，合并存取现汇总和转账汇总。
 
         Parameters:
         -----------
@@ -215,7 +293,7 @@ class ExcelExporter(BaseExporter):
             return
 
         full_data = bank_model.data.copy()
-        
+
         group_keys = ['本方姓名']
         if '数据来源' in full_data.columns:
             group_keys.insert(0, '数据来源')
@@ -226,12 +304,14 @@ class ExcelExporter(BaseExporter):
             取现金额=('支出金额', lambda x: x[full_data.loc[x.index, '存取现标识'] == '取现'].sum())
         ).reset_index()
         cash_summary = cash_summary[(cash_summary['存现金额'] > 0) | (cash_summary['取现金额'] > 0)]
-        
+
+        # 为存取现汇总添加分析类型和平台字段
         if not cash_summary.empty:
-            cash_summary.to_excel(writer, sheet_name='存取现汇总', index=False)
-            worksheet = writer.sheets['存取现汇总']
-            self._set_column_widths(worksheet, cash_summary)
-            self._format_sheet(worksheet, cash_summary, writer.book)
+            cash_summary['分析类型'] = '存取现'
+            cash_summary['平台'] = '银行'
+            # 重新排列列顺序
+            cols = ['分析类型', '平台'] + [col for col in cash_summary.columns if col not in ['分析类型', '平台']]
+            cash_summary = cash_summary[cols]
 
         # 转账汇总
         transfer_summary = full_data[full_data['存取现标识'] == '转账'].groupby(group_keys).agg(
@@ -240,13 +320,678 @@ class ExcelExporter(BaseExporter):
         ).reset_index()
         transfer_summary = transfer_summary[(transfer_summary['转入金额'] > 0) | (transfer_summary['转出金额'] > 0)]
 
+        # 为转账汇总添加分析类型和平台字段，并统一列名
         if not transfer_summary.empty:
-            transfer_summary.to_excel(writer, sheet_name='转账汇总', index=False)
-            worksheet = writer.sheets['转账汇总']
-            self._set_column_widths(worksheet, transfer_summary)
-            self._format_sheet(worksheet, transfer_summary, writer.book)
+            transfer_summary['分析类型'] = '转账'
+            transfer_summary['平台'] = '银行'
+            # 统一列名以便合并
+            transfer_summary['存现金额'] = 0
+            transfer_summary['取现金额'] = 0
+            # 重新排列列顺序
+            cols = ['分析类型', '平台'] + [col for col in transfer_summary.columns if col not in ['分析类型', '平台']]
+            transfer_summary = transfer_summary[cols]
 
-        self.logger.info("已添加汇总总表")
+        # 合并存取现汇总和转账汇总
+        combined_summary_list = []
+        if not cash_summary.empty:
+            # 为存取现汇总添加转账相关的空列
+            cash_summary['转入金额'] = 0
+            cash_summary['转出金额'] = 0
+            combined_summary_list.append(cash_summary)
+
+        if not transfer_summary.empty:
+            combined_summary_list.append(transfer_summary)
+
+        if combined_summary_list:
+            # 合并所有汇总数据
+            combined_summary = pd.concat(combined_summary_list, ignore_index=True)
+
+            # 确保列顺序一致
+            base_cols = ['分析类型', '平台']
+            if '数据来源' in combined_summary.columns:
+                base_cols.append('数据来源')
+            base_cols.extend(['本方姓名', '存现金额', '取现金额', '转入金额', '转出金额'])
+
+            # 只保留存在的列
+            final_cols = [col for col in base_cols if col in combined_summary.columns]
+            combined_summary = combined_summary[final_cols]
+
+            # 导出合并后的分析汇总表
+            combined_summary.to_excel(writer, sheet_name='分析汇总表', index=False)
+            worksheet = writer.sheets['分析汇总表']
+            self._set_column_widths(worksheet, combined_summary)
+            self._format_sheet(worksheet, combined_summary, writer.book)
+
+        self.logger.info("已添加分析汇总表")
+
+    def add_comprehensive_summary_sheets(self, writer: pd.ExcelWriter, data_models: Dict):
+        """
+        添加综合分析汇总表，包含银行、微信、支付宝的汇总数据。
+
+        Parameters:
+        -----------
+        writer : pd.ExcelWriter
+            Excel写入器对象
+        data_models : Dict
+            包含各种数据模型的字典
+        """
+        all_summary_data = []
+
+        # 处理银行数据
+        if data_models and 'bank' in data_models and data_models['bank']:
+            bank_summary = self._get_bank_summary_data(data_models['bank'])
+            if not bank_summary.empty:
+                all_summary_data.append(bank_summary)
+
+        # 处理微信数据
+        if data_models and 'wechat' in data_models and data_models['wechat']:
+            wechat_summary = self._get_payment_summary_data(data_models['wechat'], '微信')
+            if not wechat_summary.empty:
+                all_summary_data.append(wechat_summary)
+
+        # 处理支付宝数据
+        if data_models and 'alipay' in data_models and data_models['alipay']:
+            alipay_summary = self._get_payment_summary_data(data_models['alipay'], '支付宝')
+            if not alipay_summary.empty:
+                all_summary_data.append(alipay_summary)
+
+        # 合并所有汇总数据
+        if all_summary_data:
+            combined_summary = pd.concat(all_summary_data, ignore_index=True)
+
+            # 导出合并后的分析汇总表
+            combined_summary.to_excel(writer, sheet_name='分析汇总表', index=False)
+            worksheet = writer.sheets['分析汇总表']
+            self._set_column_widths(worksheet, combined_summary)
+            self._format_sheet(worksheet, combined_summary, writer.book)
+
+            self.logger.info("已添加综合分析汇总表")
+
+    def _get_bank_summary_data(self, bank_model) -> pd.DataFrame:
+        """获取银行数据的汇总信息"""
+        if not bank_model or bank_model.data.empty:
+            return pd.DataFrame()
+
+        full_data = bank_model.data.copy()
+
+        group_keys = ['本方姓名']
+        if '数据来源' in full_data.columns:
+            group_keys.insert(0, '数据来源')
+
+        # 存取现汇总
+        cash_summary = full_data.groupby(group_keys).agg(
+            存现金额=('收入金额', lambda x: x[full_data.loc[x.index, '存取现标识'] == '存现'].sum()),
+            取现金额=('支出金额', lambda x: x[full_data.loc[x.index, '存取现标识'] == '取现'].sum())
+        ).reset_index()
+        cash_summary = cash_summary[(cash_summary['存现金额'] > 0) | (cash_summary['取现金额'] > 0)]
+
+        # 转账汇总
+        transfer_summary = full_data[full_data['存取现标识'] == '转账'].groupby(group_keys).agg(
+            转入金额=('收入金额', 'sum'),
+            转出金额=('支出金额', 'sum')
+        ).reset_index()
+        transfer_summary = transfer_summary[(transfer_summary['转入金额'] > 0) | (transfer_summary['转出金额'] > 0)]
+
+        # 合并银行数据
+        combined_bank_data = []
+
+        if not cash_summary.empty:
+            cash_summary['分析类型'] = '存取现'
+            cash_summary['平台'] = '银行'
+            cash_summary['转入金额'] = 0
+            cash_summary['转出金额'] = 0
+            combined_bank_data.append(cash_summary)
+
+        if not transfer_summary.empty:
+            transfer_summary['分析类型'] = '转账'
+            transfer_summary['平台'] = '银行'
+            transfer_summary['存现金额'] = 0
+            transfer_summary['取现金额'] = 0
+            combined_bank_data.append(transfer_summary)
+
+        if combined_bank_data:
+            result = pd.concat(combined_bank_data, ignore_index=True)
+            # 统一列顺序
+            base_cols = ['分析类型', '平台']
+            if '数据来源' in result.columns:
+                base_cols.append('数据来源')
+            base_cols.extend(['本方姓名', '存现金额', '取现金额', '转入金额', '转出金额'])
+            final_cols = [col for col in base_cols if col in result.columns]
+            return result[final_cols]
+
+        return pd.DataFrame()
+
+    def _get_payment_summary_data(self, payment_model, platform_name: str) -> pd.DataFrame:
+        """获取微信/支付宝数据的汇总信息"""
+        if not payment_model or payment_model.data.empty:
+            return pd.DataFrame()
+
+        full_data = payment_model.data.copy()
+
+        group_keys = ['本方姓名']
+        if '数据来源' in full_data.columns:
+            group_keys.insert(0, '数据来源')
+
+        # 微信/支付宝转账汇总
+        summary = full_data.groupby(group_keys).agg(
+            转入金额=('收入金额', 'sum'),
+            转出金额=('支出金额', 'sum')
+        ).reset_index()
+        summary = summary[(summary['转入金额'] > 0) | (summary['转出金额'] > 0)]
+
+        if not summary.empty:
+            summary['分析类型'] = '转账'
+            summary['平台'] = platform_name
+            summary['存现金额'] = 0
+            summary['取现金额'] = 0
+
+            # 统一列顺序
+            base_cols = ['分析类型', '平台']
+            if '数据来源' in summary.columns:
+                base_cols.append('数据来源')
+            base_cols.extend(['本方姓名', '存现金额', '取现金额', '转入金额', '转出金额'])
+            final_cols = [col for col in base_cols if col in summary.columns]
+            return summary[final_cols]
+
+        return pd.DataFrame()
+
+    def _standardize_frequency_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        统一频率表的字段结构，添加收入总额、收入占比、支出总额、支出占比字段
+
+        Parameters:
+        -----------
+        df : pd.DataFrame
+            原始频率表数据
+
+        Returns:
+        --------
+        pd.DataFrame
+            标准化后的频率表数据
+        """
+        df_copy = df.copy()
+
+        # 确保必要的字段存在
+        required_fields = ['总收入', '总支出', '交易次数']
+        for field in required_fields:
+            if field not in df_copy.columns:
+                df_copy[field] = 0
+
+        # 计算总金额
+        if '交易总金额' not in df_copy.columns:
+            df_copy['交易总金额'] = df_copy['总收入'] + df_copy['总支出']
+
+        # 计算收入和支出占比
+        total_income = df_copy['总收入'].sum()
+        total_expense = df_copy['总支出'].sum()
+
+        if total_income > 0:
+            df_copy['收入占比'] = (df_copy['总收入'] / total_income * 100).round(2)
+        else:
+            df_copy['收入占比'] = 0
+
+        if total_expense > 0:
+            df_copy['支出占比'] = (df_copy['总支出'] / total_expense * 100).round(2)
+        else:
+            df_copy['支出占比'] = 0
+
+        # 重命名字段以保持一致性
+        rename_mapping = {
+            '总收入': '收入总额',
+            '总支出': '支出总额'
+        }
+        df_copy.rename(columns=rename_mapping, inplace=True)
+
+        return df_copy
+
+    def _standardize_call_frequency_table(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        统一话单类频率表的字段结构
+
+        Parameters:
+        -----------
+        df : pd.DataFrame
+            原始话单频率表数据
+
+        Returns:
+        --------
+        pd.DataFrame
+            标准化后的话单频率表数据
+        """
+        df_copy = df.copy()
+
+        # 话单类频率表通常包含通话次数、通话时长等字段
+        # 确保必要的字段存在
+        if '通话次数' not in df_copy.columns:
+            df_copy['通话次数'] = 0
+        if '通话时长' not in df_copy.columns:
+            df_copy['通话时长'] = 0
+
+        # 计算通话占比
+        total_calls = df_copy['通话次数'].sum()
+        if total_calls > 0:
+            df_copy['通话占比'] = (df_copy['通话次数'] / total_calls * 100).round(2)
+        else:
+            df_copy['通话占比'] = 0
+
+        return df_copy
+
+    def _generate_comprehensive_analysis(self, writer: pd.ExcelWriter, call_frequency_dfs: list, bill_frequency_dfs: list):
+        """
+        生成综合分析表，进行话单类和账单类的交叉分析
+
+        Parameters:
+        -----------
+        writer : pd.ExcelWriter
+            Excel写入器对象
+        call_frequency_dfs : list
+            话单类频率表数据列表
+        bill_frequency_dfs : list
+            账单类频率表数据列表
+        """
+        # 合并话单类和账单类数据
+        combined_call_df = pd.concat(call_frequency_dfs, ignore_index=True) if call_frequency_dfs else pd.DataFrame()
+        combined_bill_df = pd.concat(bill_frequency_dfs, ignore_index=True) if bill_frequency_dfs else pd.DataFrame()
+
+        comprehensive_results = []
+
+        # 1. 以话单为基准的交叉分析
+        if not combined_call_df.empty and not combined_bill_df.empty:
+            call_based_analysis = self._cross_analyze_with_call_base(combined_call_df, combined_bill_df)
+            if not call_based_analysis.empty:
+                call_based_analysis['分析基准'] = '以话单为基准'
+                comprehensive_results.append(call_based_analysis)
+
+        # 2. 以账单类为基准的交叉分析
+        if not combined_bill_df.empty and not combined_call_df.empty:
+            bill_based_analysis = self._cross_analyze_with_bill_base(combined_bill_df, combined_call_df)
+            if not bill_based_analysis.empty:
+                bill_based_analysis['分析基准'] = '以账单类为基准'
+                comprehensive_results.append(bill_based_analysis)
+
+        # 合并并导出综合分析结果
+        if comprehensive_results:
+            final_comprehensive_df = pd.concat(comprehensive_results, ignore_index=True)
+            # 将分析基准列放在前面
+            cols = ['分析基准'] + [col for col in final_comprehensive_df.columns if col != '分析基准']
+            final_comprehensive_df = final_comprehensive_df[cols]
+
+            final_comprehensive_df.to_excel(writer, sheet_name='综合分析', index=False)
+            worksheet = writer.sheets['综合分析']
+            self._set_column_widths(worksheet, final_comprehensive_df)
+            self._format_sheet(worksheet, final_comprehensive_df, writer.book)
+
+            self.logger.info("已生成综合分析表")
+
+    def _cross_analyze_with_call_base(self, call_df: pd.DataFrame, bill_df: pd.DataFrame) -> pd.DataFrame:
+        """以话单为基准进行交叉分析"""
+        # 基于对方姓名进行匹配，并计算各平台的金额分布
+        bill_platform_summary = bill_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
+            '收入总额': 'sum',
+            '支出总额': 'sum',
+            '交易次数': 'sum'
+        }).reset_index()
+
+        # 计算总金额
+        bill_total_summary = bill_df.groupby(['本方姓名', '对方姓名']).agg({
+            '收入总额': 'sum',
+            '支出总额': 'sum',
+            '交易次数': 'sum',
+            '平台': lambda x: '、'.join(x.unique())
+        }).reset_index()
+
+        # 计算各平台的金额分布
+        platform_details = bill_platform_summary.groupby(['本方姓名', '对方姓名']).apply(
+            lambda group: self._format_platform_details(group)
+        ).reset_index(name='平台金额分布')
+
+        # 合并总金额和平台详情
+        bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
+
+        # 获取话单中的对方详细信息
+        agg_dict = {
+            '通话次数': 'sum',
+            '通话时长': 'sum',
+            '数据来源': 'first'
+        }
+
+        # 安全地添加可选字段
+        if '对方号码' in call_df.columns:
+            agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        if '对方单位名称' in call_df.columns:
+            agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        if '对方职务' in call_df.columns:
+            agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+
+        call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
+
+        # 与话单数据合并
+        merged_df = pd.merge(
+            call_details,
+            bill_summary_with_details,
+            on=['本方姓名', '对方姓名'],
+            how='left'
+        )
+
+        # 填充空值
+        merged_df['收入总额'] = merged_df['收入总额'].fillna(0)
+        merged_df['支出总额'] = merged_df['支出总额'].fillna(0)
+        merged_df['交易次数'] = merged_df['交易次数'].fillna(0)
+        merged_df['平台'] = merged_df['平台'].fillna('无')
+        merged_df['平台金额分布'] = merged_df['平台金额分布'].fillna('无')
+
+        # 安全地填充可选字段的空值
+        if '对方号码' in merged_df.columns:
+            merged_df['对方号码'] = merged_df['对方号码'].fillna('')
+        if '对方单位名称' in merged_df.columns:
+            merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
+        if '对方职务' in merged_df.columns:
+            merged_df['对方职务'] = merged_df['对方职务'].fillna('')
+
+        # 重新排列列的顺序，将对方详细信息放在对方姓名后面
+        base_columns = ['本方姓名', '对方姓名']
+        detail_columns = []
+
+        # 安全地添加存在的详细信息字段
+        for field in ['对方号码', '对方单位名称', '对方职务']:
+            if field in merged_df.columns:
+                detail_columns.append(field)
+
+        other_columns = [col for col in merged_df.columns if col not in base_columns + detail_columns]
+        merged_df = merged_df[base_columns + detail_columns + other_columns]
+
+        return merged_df
+
+    def _format_platform_details(self, group: pd.DataFrame) -> str:
+        """格式化平台金额分布详情"""
+        details = []
+        for _, row in group.iterrows():
+            platform = row['平台']
+            income = row['收入总额']
+            expense = row['支出总额']
+            if income > 0 or expense > 0:
+                detail = f"{platform}(收入{income:.0f}元,支出{expense:.0f}元)"
+                details.append(detail)
+        return '; '.join(details) if details else '无'
+
+    def _cross_analyze_with_bill_base(self, bill_df: pd.DataFrame, call_df: pd.DataFrame) -> pd.DataFrame:
+        """以账单类为基准进行交叉分析"""
+        # 对账单类数据按对方姓名进行金额累计和去重，并计算平台分布
+        bill_platform_summary = bill_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
+            '收入总额': 'sum',
+            '支出总额': 'sum',
+            '交易次数': 'sum'
+        }).reset_index()
+
+        # 计算总金额
+        bill_total_summary = bill_df.groupby(['本方姓名', '对方姓名']).agg({
+            '收入总额': 'sum',
+            '支出总额': 'sum',
+            '交易次数': 'sum',
+            '平台': lambda x: '、'.join(x.unique())
+        }).reset_index()
+
+        # 计算各平台的金额分布
+        platform_details = bill_platform_summary.groupby(['本方姓名', '对方姓名']).apply(
+            lambda group: self._format_platform_details(group)
+        ).reset_index(name='平台金额分布')
+
+        # 合并总金额和平台详情
+        bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
+
+        # 获取话单中的对方详细信息
+        agg_dict = {
+            '通话次数': 'sum',
+            '通话时长': 'sum'
+        }
+
+        # 安全地添加可选字段
+        if '对方号码' in call_df.columns:
+            agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        if '对方单位名称' in call_df.columns:
+            agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        if '对方职务' in call_df.columns:
+            agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+
+        call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
+
+        # 与话单数据合并
+        merged_df = pd.merge(
+            bill_summary_with_details,
+            call_details,
+            on=['本方姓名', '对方姓名'],
+            how='left'
+        )
+
+        # 填充空值
+        merged_df['通话次数'] = merged_df['通话次数'].fillna(0)
+        merged_df['通话时长'] = merged_df['通话时长'].fillna(0)
+
+        # 安全地填充可选字段的空值
+        if '对方号码' in merged_df.columns:
+            merged_df['对方号码'] = merged_df['对方号码'].fillna('')
+        if '对方单位名称' in merged_df.columns:
+            merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
+        if '对方职务' in merged_df.columns:
+            merged_df['对方职务'] = merged_df['对方职务'].fillna('')
+
+        # 重新排列列的顺序，将对方详细信息放在对方姓名后面
+        base_columns = ['本方姓名', '对方姓名']
+        detail_columns = []
+
+        # 安全地添加存在的详细信息字段
+        for field in ['对方号码', '对方单位名称', '对方职务']:
+            if field in merged_df.columns:
+                detail_columns.append(field)
+
+        other_columns = [col for col in merged_df.columns if col not in base_columns + detail_columns]
+        merged_df = merged_df[base_columns + detail_columns + other_columns]
+
+        return merged_df
+
+    def export_platform_raw_data(self, writer: pd.ExcelWriter, data_models: Dict, analysis_results: Dict):
+        """
+        导出平台原始数据表，将每个平台的所有原始表汇总到一个sheet中
+
+        Parameters:
+        -----------
+        writer : pd.ExcelWriter
+            Excel写入器对象
+        data_models : Dict
+            包含各种数据模型的字典
+        analysis_results : Dict
+            分析结果字典
+        """
+        # 处理银行原始数据
+        if data_models and 'bank' in data_models and data_models['bank']:
+            bank_raw_data = self._get_bank_raw_data(data_models['bank'], analysis_results)
+            if not bank_raw_data.empty:
+                bank_raw_data.to_excel(writer, sheet_name='银行分析原始', index=False)
+                worksheet = writer.sheets['银行分析原始']
+                self._set_column_widths(worksheet, bank_raw_data)
+                self._format_sheet(worksheet, bank_raw_data, writer.book)
+
+        # 处理微信原始数据
+        if data_models and 'wechat' in data_models and data_models['wechat']:
+            wechat_raw_data = self._get_payment_raw_data(data_models['wechat'], analysis_results, '微信')
+            if not wechat_raw_data.empty:
+                wechat_raw_data.to_excel(writer, sheet_name='微信分析原始', index=False)
+                worksheet = writer.sheets['微信分析原始']
+                self._set_column_widths(worksheet, wechat_raw_data)
+                self._format_sheet(worksheet, wechat_raw_data, writer.book)
+
+        # 处理支付宝原始数据
+        if data_models and 'alipay' in data_models and data_models['alipay']:
+            alipay_raw_data = self._get_payment_raw_data(data_models['alipay'], analysis_results, '支付宝')
+            if not alipay_raw_data.empty:
+                alipay_raw_data.to_excel(writer, sheet_name='支付宝分析原始', index=False)
+                worksheet = writer.sheets['支付宝分析原始']
+                self._set_column_widths(worksheet, alipay_raw_data)
+                self._format_sheet(worksheet, alipay_raw_data, writer.book)
+
+        self.logger.info("已生成平台原始数据表")
+
+    def _get_bank_raw_data(self, bank_model, analysis_results: Dict) -> pd.DataFrame:
+        """获取银行平台的原始数据"""
+        if not bank_model or bank_model.data.empty:
+            return pd.DataFrame()
+
+        all_raw_data = []
+
+        # 1. 转账数据
+        transfer_data = bank_model.data[bank_model.data['存取现标识'] == '转账'].copy()
+        if not transfer_data.empty:
+            transfer_data['分析类型'] = '转账数据'
+            all_raw_data.append(transfer_data)
+
+        # 2. 存现数据
+        deposit_data = bank_model.data[bank_model.data['存取现标识'] == '存现'].copy()
+        if not deposit_data.empty:
+            deposit_data['分析类型'] = '存现数据'
+            all_raw_data.append(deposit_data)
+
+        # 3. 取现数据
+        withdraw_data = bank_model.data[bank_model.data['存取现标识'] == '取现'].copy()
+        if not withdraw_data.empty:
+            withdraw_data['分析类型'] = '取现数据'
+            all_raw_data.append(withdraw_data)
+
+        # 4. 特殊金额数据（从分析结果中获取）
+        special_amount_data = self._get_special_data_from_results(analysis_results, '特殊金额', '银行')
+        if not special_amount_data.empty:
+            special_amount_data['分析类型'] = '特殊金额'
+            all_raw_data.append(special_amount_data)
+
+        # 5. 特殊日期数据（从分析结果中获取）
+        special_date_data = self._get_special_data_from_results(analysis_results, '特殊日期', '银行')
+        if not special_date_data.empty:
+            special_date_data['分析类型'] = '特殊日期'
+            all_raw_data.append(special_date_data)
+
+        # 6. 重点收入数据（从分析结果中获取）
+        key_income_data = self._get_key_transaction_data(bank_model, '收入')
+        if not key_income_data.empty:
+            key_income_data['分析类型'] = '重点收入'
+            all_raw_data.append(key_income_data)
+
+        # 7. 重点支出数据（从分析结果中获取）
+        key_expense_data = self._get_key_transaction_data(bank_model, '支出')
+        if not key_expense_data.empty:
+            key_expense_data['分析类型'] = '重点支出'
+            all_raw_data.append(key_expense_data)
+
+        # 合并所有数据
+        if all_raw_data:
+            combined_data = pd.concat(all_raw_data, ignore_index=True)
+            # 将分析类型列放在第一列
+            cols = ['分析类型'] + [col for col in combined_data.columns if col != '分析类型']
+            return combined_data[cols]
+
+        return pd.DataFrame()
+
+    def _get_payment_raw_data(self, payment_model, analysis_results: Dict, platform_name: str) -> pd.DataFrame:
+        """获取微信/支付宝平台的原始数据"""
+        if not payment_model or payment_model.data.empty:
+            return pd.DataFrame()
+
+        all_raw_data = []
+
+        # 1. 转账数据（所有交易数据）
+        transfer_data = payment_model.data.copy()
+        if not transfer_data.empty:
+            transfer_data['分析类型'] = '转账数据'
+            all_raw_data.append(transfer_data)
+
+        # 2. 特殊金额数据（从分析结果中获取）
+        special_amount_data = self._get_special_data_from_results(analysis_results, '特殊金额', platform_name)
+        if not special_amount_data.empty:
+            special_amount_data['分析类型'] = '特殊金额'
+            all_raw_data.append(special_amount_data)
+
+        # 3. 特殊日期数据（从分析结果中获取）
+        special_date_data = self._get_special_data_from_results(analysis_results, '特殊日期', platform_name)
+        if not special_date_data.empty:
+            special_date_data['分析类型'] = '特殊日期'
+            all_raw_data.append(special_date_data)
+
+        # 4. 重点收入数据
+        key_income_data = self._get_key_transaction_data(payment_model, '收入')
+        if not key_income_data.empty:
+            key_income_data['分析类型'] = '重点收入'
+            all_raw_data.append(key_income_data)
+
+        # 5. 重点支出数据
+        key_expense_data = self._get_key_transaction_data(payment_model, '支出')
+        if not key_expense_data.empty:
+            key_expense_data['分析类型'] = '重点支出'
+            all_raw_data.append(key_expense_data)
+
+        # 合并所有数据
+        if all_raw_data:
+            combined_data = pd.concat(all_raw_data, ignore_index=True)
+            # 将分析类型列放在第一列
+            cols = ['分析类型'] + [col for col in combined_data.columns if col != '分析类型']
+            return combined_data[cols]
+
+        return pd.DataFrame()
+
+    def _get_special_data_from_results(self, analysis_results: Dict, data_type: str, platform: str) -> pd.DataFrame:
+        """从分析结果中获取特殊数据"""
+        for result_name, df in analysis_results.items():
+            if (data_type in result_name and
+                (platform == '银行' or platform in result_name or
+                 ('微信' in platform and 'Wechat' in result_name) or
+                 ('支付宝' in platform and 'Alipay' in result_name))):
+                return df.copy()
+        return pd.DataFrame()
+
+    def _get_key_transaction_data(self, data_model, transaction_type: str) -> pd.DataFrame:
+        """获取重点交易数据"""
+        try:
+            from src.utils.key_transactions import KeyTransactionEngine
+
+            # 获取配置对象
+            config = getattr(data_model, 'config', None)
+            key_engine = KeyTransactionEngine(config)
+
+            if not key_engine.enabled:
+                return pd.DataFrame()
+
+            # 识别重点收支
+            if hasattr(data_model, 'summary_column'):
+                # 银行数据
+                key_data = key_engine.identify_key_transactions(
+                    data_model.data,
+                    data_model.summary_column,
+                    data_model.remark_column,
+                    getattr(data_model, 'type_column', None),
+                    data_model.amount_column,
+                    data_model.opposite_name_column
+                )
+            else:
+                # 微信/支付宝数据
+                key_data = key_engine.identify_key_transactions(
+                    data_model.data,
+                    None,
+                    getattr(data_model, 'remark_column', None),
+                    getattr(data_model, 'type_column', None),
+                    data_model.amount_column,
+                    data_model.opposite_name_column
+                )
+
+            # 筛选出重点收支数据
+            key_transactions = key_data[key_data['是否重点收支']].copy()
+
+            if transaction_type == '收入':
+                return key_transactions[key_transactions[data_model.amount_column] > 0]
+            elif transaction_type == '支出':
+                return key_transactions[key_transactions[data_model.amount_column] < 0]
+            else:
+                return key_transactions
+
+        except Exception as e:
+            self.logger.error(f"获取重点交易数据时出错: {e}")
+            return pd.DataFrame()
 
     def export_raw_bank_data(self, writer: pd.ExcelWriter, bank_model: 'BankDataModel'):
         """

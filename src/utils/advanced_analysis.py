@@ -257,8 +257,23 @@ class AdvancedAnalysisEngine:
 
             # 合并日期和时间
             try:
-                data['datetime'] = pd.to_datetime(data[date_column].dt.date.astype(str) + ' ' +
-                                                data[time_column].dt.time.astype(str), errors='coerce')
+                # 明确指定日期时间格式以避免警告
+                date_str = data[date_column].dt.date.astype(str)
+                time_str = data[time_column].dt.time.astype(str)
+                datetime_str = date_str + ' ' + time_str
+
+                # 尝试使用常见的日期时间格式
+                try:
+                    data['datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
+                except:
+                    try:
+                        data['datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+                    except:
+                        # 如果指定格式失败，使用自动推断但不显示警告
+                        import warnings
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            data['datetime'] = pd.to_datetime(datetime_str, errors='coerce')
             except:
                 # 如果合并失败，只使用日期
                 data['datetime'] = data[date_column]

@@ -759,12 +759,18 @@ class WordExporter:
             for love_amount in love_amounts:
                 love_txns = special_amounts_df[special_amounts_df[amount_col].abs() == love_amount]
                 if not love_txns.empty:
-                    # 收集该金额下所有不同的对手方，过滤掉超过4个字的名字
-                    opponents = love_txns[opponent_col].dropna().unique()
-                    filtered_opponents = [str(opp) for opp in opponents if pd.notna(opp) and len(str(opp)) <= 4]
-                    opponents_str = "、".join(filtered_opponents)
+                    # 收集该金额下所有不同的对手方和次数，不过滤名字长度
+                    opponents_count = love_txns[opponent_col].value_counts()
+                    opponents_list = []
+                    for opponent, count in opponents_count.items():
+                        if pd.notna(opponent):
+                            opponents_list.append(f"{str(opponent)}，{count}次")
+                        else:
+                            opponents_list.append(f"未知，{count}次")
+
+                    opponents_str = "、".join(opponents_list)
                     if not opponents_str:
-                        opponents_str = "未知"
+                        opponents_str = "未知，1次"
                     amount_groups[love_amount] = opponents_str
             
             # 然后处理其他特殊金额，只显示前三个不同金额
@@ -773,12 +779,21 @@ class WordExporter:
             
             for amount in top_other_amounts:
                 abs_amount = abs(amount)
-                # 只获取该金额的第一个交易的对手方
+                # 收集该金额下所有不同的对手方和次数
                 amount_txns = special_amounts_df[special_amounts_df[amount_col].abs() == abs_amount]
                 if not amount_txns.empty:
-                    opponent = amount_txns.iloc[0][opponent_col]
-                    opponent_str = str(opponent) if pd.notna(opponent) else "未知"
-                    amount_groups[abs_amount] = opponent_str
+                    opponents_count = amount_txns[opponent_col].value_counts()
+                    opponents_list = []
+                    for opponent, count in opponents_count.items():
+                        if pd.notna(opponent):
+                            opponents_list.append(f"{str(opponent)}，{count}次")
+                        else:
+                            opponents_list.append(f"未知，{count}次")
+
+                    opponents_str = "、".join(opponents_list)
+                    if not opponents_str:
+                        opponents_str = "未知，1次"
+                    amount_groups[abs_amount] = opponents_str
             
             # 构建显示字符串
             p.add_run("特殊金额包括：")
@@ -906,15 +921,23 @@ class WordExporter:
         count_cols = [col for col in all_results_df.columns if '次数' in col or '总额' in col]
         if not count_cols:
              # 如果没有可用于计数的列，则无法计算关联数据源，直接按姓名去重
-            display_df = all_results_df.drop_duplicates(subset=['本方姓名', '对方姓名']).head(10)
+            display_df = all_results_df.drop_duplicates(subset=['本方姓名', '对方姓名'])
         else:
             all_results_df['关联数据源数量'] = all_results_df[count_cols].notna().sum(axis=1)
             # 按"本方姓名"和"对方姓名"分组，保留每个分组中"关联数据源数量"最大的那一行
             deduplicated_df = all_results_df.loc[all_results_df.groupby(['本方姓名', '对方姓名'])['关联数据源数量'].idxmax()]
-            
-            # 在去重后的结果中，筛选出至少在两个不同类型数据中都出现过的对手方，并取前10条
-            correlated_df = deduplicated_df[deduplicated_df['关联数据源数量'] > 1].sort_values(by='关联数据源数量', ascending=False)
-            display_df = correlated_df.head(10)
+
+            # 在去重后的结果中，筛选出至少在两个不同类型数据中都出现过的对手方
+            display_df = deduplicated_df[deduplicated_df['关联数据源数量'] > 1]
+
+        # 按本方姓名排序，然后按关联数据源数量降序排序，确保结果按人员分组显示
+        if '关联数据源数量' in display_df.columns:
+            display_df = display_df.sort_values(by=['本方姓名', '关联数据源数量'], ascending=[True, False])
+        else:
+            display_df = display_df.sort_values(by='本方姓名')
+
+        # 取前20条记录以确保每个人都有足够的展示
+        display_df = display_df.head(20)
 
         if display_df.empty:
             doc.add_paragraph("未发现显著关联的对手方。")
@@ -983,8 +1006,41 @@ class WordExporter:
             '银行总金额', '微信总金额', '支付宝总金额', '通话次数'
         ]
         
-        # 添加到文档
-        self._add_df_to_doc(doc, final_df[display_columns])
+        # 按本方姓名分组显示，使表格更清晰
+        self._add_grouped_df_to_doc(doc, final_df[display_columns], group_by='本方姓名')
+
+    def _add_grouped_df_to_doc(self, doc: Document, df: pd.DataFrame, group_by: str):
+        """
+        按指定列分组显示DataFrame，使结果更清晰
+
+        Parameters:
+        -----------
+        doc : Document
+            Word文档对象
+        df : pd.DataFrame
+            要显示的数据框
+        group_by : str
+            分组列名
+        """
+        if df.empty:
+            doc.add_paragraph("无数据可显示。")
+            return
+
+        # 按分组列分组
+        grouped = df.groupby(group_by)
+
+        for group_name, group_df in grouped:
+            # 添加分组标题
+            doc.add_paragraph(f"【{group_name}】", style='Heading 3')
+
+            # 为该分组创建表格，不显示分组列（因为已经在标题中显示了）
+            display_df = group_df.drop(columns=[group_by]).reset_index(drop=True)
+
+            # 添加表格
+            self._add_df_to_doc(doc, display_df)
+
+            # 添加空行分隔
+            doc.add_paragraph("")
 
     def _add_top_opponent_tables(self, doc: Document, frequency_df: pd.DataFrame):
         """为资金分析添加Top5对手方表格"""
@@ -1219,120 +1275,112 @@ class WordExporter:
         p = doc.add_paragraph()
         p.add_run(f"{section_num}、{data_type}重点收支：").bold = True
 
-        # 工作收入部分
+        # 工作收入部分 - 按照新格式：工作收入XX元（XX年XX月至XX年XX月，XX次，注意不需要具体日期和时间），疑似工作单位有X个（XX，XX，XX，最多列举前三个，如果对方姓名为空的，合并算一个）
         if work_income_total > 0:
             time_range = stats.get('时间范围', '')
+            # 提取年月信息，去掉具体日期
+            time_range_formatted = self._format_time_range_to_year_month(time_range)
+
             work_income_run = p.add_run("工作收入")
             work_income_run.underline = True
-            p.add_run(f"总额{work_income_total:,.2f}元（{time_range}，{work_income_count}次）")
+            p.add_run(f"{work_income_total:,.0f}元（{time_range_formatted}，{work_income_count}次）")
 
             # 工作单位信息
             if work_units_count > 0:
-                p.add_run("，")
-                units_run = p.add_run("可能工作单位")
+                p.add_run("，疑似工作单位有")
+                units_run = p.add_run(f"{work_units_count}个")
                 units_run.underline = True
-                p.add_run(f"有{work_units_count}个")
 
                 if work_units:
                     p.add_run(f"（{work_units}）")
 
             p.add_run("；")
 
-        # 资产收入部分
+        # 资产收入部分 - 按照新格式：资产收入XX元（XX年XX月至XX年XX月，疑似与房有关XX次XX元、与车有关XX次XX元、与租金有关XX次XX元、理财XX次XX元）
         if asset_income_total > 0:
             time_range = stats.get('时间范围', '')
+            time_range_formatted = self._format_time_range_to_year_month(time_range)
+
             property_count = stats.get('房产收入次数', 0)
+            property_amount = stats.get('房产收入金额', 0)
             rental_count = stats.get('租金收入次数', 0)
+            rental_amount = stats.get('租金收入金额', 0)
             vehicle_income_count = stats.get('车辆收入次数', 0)
+            vehicle_income_amount = stats.get('车辆收入金额', 0)
             securities_income_count = stats.get('证券收入次数', 0)
+            securities_income_amount = stats.get('证券收入金额', 0)
 
             asset_income_run = p.add_run("资产收入")
             asset_income_run.underline = True
-            p.add_run(f"{asset_income_total:,.2f}元（{time_range}，")
+            p.add_run(f"{asset_income_total:,.0f}元（{time_range_formatted}，")
 
             asset_income_details = []
             # 房产相关
             if property_count > 0:
-                property_run = p.add_run(f"与房有关{property_count}次")
-                property_run.bold = True
-                asset_income_details.append("property")
-
-            # 租金相关（房产相关）
-            if rental_count > 0:
-                if asset_income_details:
-                    p.add_run("、")
-                rental_run = p.add_run(f"与租金有关{rental_count}次")
-                rental_run.bold = True
-                asset_income_details.append("rental")
+                asset_income_details.append(f"疑似与房有关{property_count}次{property_amount:,.0f}元")
 
             # 车辆收入相关
             if vehicle_income_count > 0:
-                if asset_income_details:
-                    p.add_run("、")
-                vehicle_income_run = p.add_run(f"与车有关{vehicle_income_count}次")
-                vehicle_income_run.bold = True
-                asset_income_details.append("vehicle_income")
+                asset_income_details.append(f"与车有关{vehicle_income_count}次{vehicle_income_amount:,.0f}元")
 
-            # 证券收入不加粗
+            # 租金相关
+            if rental_count > 0:
+                asset_income_details.append(f"与租金有关{rental_count}次{rental_amount:,.0f}元")
+
+            # 理财（证券）相关
             if securities_income_count > 0:
-                if asset_income_details:
-                    p.add_run("、")
-                p.add_run(f"证券{securities_income_count}次")
-                asset_income_details.append("securities_income")
+                asset_income_details.append(f"理财{securities_income_count}次{securities_income_amount:,.0f}元")
 
-            if not asset_income_details:
+            if asset_income_details:
+                p.add_run("、".join(asset_income_details))
+            else:
                 p.add_run("其他资产收入")
 
             p.add_run("）；")
 
-        # 资产支出部分
+        # 资产支出部分 - 按照新格式：资产支出XX元（XX年XX月至XX年XX月，疑似与房有关XX次XX元、与车有关XX次XX元、与租金有关XX次XX元、理财XX次XX元）
         if asset_expense_total > 0:
             time_range = stats.get('时间范围', '')
+            time_range_formatted = self._format_time_range_to_year_month(time_range)
+
             property_expense_count = stats.get('房产支出次数', 0)
+            property_expense_amount = stats.get('房产支出金额', 0)
             vehicle_expense_count = stats.get('车辆支出次数', 0)
+            vehicle_expense_amount = stats.get('车辆支出金额', 0)
             rental_expense_count = stats.get('租金支出次数', 0)
+            rental_expense_amount = stats.get('租金支出金额', 0)
             securities_expense_count = stats.get('证券支出次数', 0)
+            securities_expense_amount = stats.get('证券支出金额', 0)
 
             asset_expense_run = p.add_run("资产支出")
             asset_expense_run.underline = True
-            p.add_run(f"{asset_expense_total:,.2f}元（{time_range}，")
+            p.add_run(f"{asset_expense_total:,.0f}元（{time_range_formatted}，")
 
             asset_expense_details = []
             # 房产支出相关
             if property_expense_count > 0:
-                property_expense_run = p.add_run(f"与房有关{property_expense_count}次")
-                property_expense_run.bold = True
-                asset_expense_details.append("property_expense")
+                asset_expense_details.append(f"疑似与房有关{property_expense_count}次{property_expense_amount:,.0f}元")
 
             # 车辆支出相关
             if vehicle_expense_count > 0:
-                if asset_expense_details:
-                    p.add_run("、")
-                vehicle_expense_run = p.add_run(f"与车有关{vehicle_expense_count}次")
-                vehicle_expense_run.bold = True
-                asset_expense_details.append("vehicle_expense")
+                asset_expense_details.append(f"与车有关{vehicle_expense_count}次{vehicle_expense_amount:,.0f}元")
 
             # 租金支出相关
             if rental_expense_count > 0:
-                if asset_expense_details:
-                    p.add_run("、")
-                rental_expense_run = p.add_run(f"与租金有关{rental_expense_count}次")
-                rental_expense_run.bold = True
-                asset_expense_details.append("rental_expense")
+                asset_expense_details.append(f"与租金有关{rental_expense_count}次{rental_expense_amount:,.0f}元")
 
-            # 证券支出不加粗
+            # 理财（证券）支出相关
             if securities_expense_count > 0:
-                if asset_expense_details:
-                    p.add_run("、")
-                p.add_run(f"证券{securities_expense_count}次")
-                asset_expense_details.append("securities_expense")
+                asset_expense_details.append(f"理财{securities_expense_count}次{securities_expense_amount:,.0f}元")
 
-            if not asset_expense_details:
+            if asset_expense_details:
+                p.add_run("、".join(asset_expense_details))
+            else:
                 p.add_run("其他资产支出")
 
             p.add_run("）；")
 
-        # 大额收入部分
+        # 大额收入部分 - 按照新格式：大额收入XX元（10万-50万XX次；50万-100万XX次、100万及以上的XX次）
         if large_income_total > 0:
             large_income_10_50 = stats.get('大额收入_10万-50万_次数', 0)
             large_income_50_100 = stats.get('大额收入_50万-100万_次数', 0)
@@ -1340,7 +1388,7 @@ class WordExporter:
 
             large_income_run = p.add_run("大额收入")
             large_income_run.underline = True
-            p.add_run(f"总额{large_income_total:,.2f}元（")
+            p.add_run(f"{large_income_total:,.0f}元（")
 
             income_details = []
             if large_income_10_50 > 0:
@@ -1353,7 +1401,7 @@ class WordExporter:
             p.add_run("；".join(income_details))
             p.add_run("）；")
 
-        # 大额支出部分
+        # 大额支出部分 - 按照新格式：大额支出XX元（10万-50万XX次；50万-100万XX次、100万及以上的XX次）
         if large_expense_total > 0:
             large_expense_10_50 = stats.get('大额支出_10万-50万_次数', 0)
             large_expense_50_100 = stats.get('大额支出_50万-100万_次数', 0)
@@ -1361,7 +1409,7 @@ class WordExporter:
 
             large_expense_run = p.add_run("大额支出")
             large_expense_run.underline = True
-            p.add_run(f"总额{large_expense_total:,.2f}元（")
+            p.add_run(f"{large_expense_total:,.0f}元（")
 
             expense_details = []
             if large_expense_10_50 > 0:
@@ -1377,3 +1425,48 @@ class WordExporter:
             # 如果没有大额支出，去掉最后一个分号，改为句号
             if p.runs and p.runs[-1].text.endswith("；"):
                 p.runs[-1].text = p.runs[-1].text[:-1] + "。"
+
+    def _format_time_range_to_year_month(self, time_range: str) -> str:
+        """
+        将时间范围格式化为年月格式，去掉具体日期
+
+        Parameters:
+        -----------
+        time_range : str
+            原始时间范围，格式如 "2023-01-15 至 2023-12-30"
+
+        Returns:
+        --------
+        str
+            格式化后的时间范围，格式如 "2023年01月至2023年12月"
+        """
+        try:
+            if ' 至 ' in time_range:
+                start_date, end_date = time_range.split(' 至 ')
+
+                # 提取年月信息
+                if '-' in start_date:
+                    start_parts = start_date.split('-')
+                    if len(start_parts) >= 2:
+                        start_year, start_month = start_parts[0], start_parts[1]
+                        start_formatted = f"{start_year}年{start_month}月"
+                    else:
+                        start_formatted = start_date
+                else:
+                    start_formatted = start_date
+
+                if '-' in end_date:
+                    end_parts = end_date.split('-')
+                    if len(end_parts) >= 2:
+                        end_year, end_month = end_parts[0], end_parts[1]
+                        end_formatted = f"{end_year}年{end_month}月"
+                    else:
+                        end_formatted = end_date
+                else:
+                    end_formatted = end_date
+
+                return f"{start_formatted}至{end_formatted}"
+            else:
+                return time_range
+        except Exception:
+            return time_range

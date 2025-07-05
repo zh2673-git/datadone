@@ -99,11 +99,11 @@ class BankAnalyzer(BaseAnalyzer):
             self.logger.warning(f"找不到数据来源 '{source_name}' 的数据")
             return results
             
-        # 1. 存取现分析
-        if analysis_type in ['cash', 'all']:
-            cash_result = self.analyze_cash_operations(source_data)
-            if not cash_result.empty:
-                results[f"{source_name}_存取现分析"] = cash_result
+        # 1. 存取现分析 - 已移除单独的存取现分析表，因为已被存取现汇总概括
+        # if analysis_type in ['cash', 'all']:
+        #     cash_result = self.analyze_cash_operations(source_data)
+        #     if not cash_result.empty:
+        #         results[f"{source_name}_存取现分析"] = cash_result
 
         # 2. 交易频率分析
         if analysis_type in ['frequency', 'all']:
@@ -442,14 +442,68 @@ class BankAnalyzer(BaseAnalyzer):
             return descriptions[dimension][metric]
         else:
             # 提供更通俗的默认描述
-            if '占比' in metric or '比例' in metric:
-                return f"{dimension}中{metric}的百分比"
-            elif '数量' in metric or '次数' in metric:
-                return f"{dimension}的{metric}"
-            elif '金额' in metric:
-                return f"{dimension}的{metric}统计"
+            return self._generate_friendly_description(dimension, metric)
+
+    def _generate_friendly_description(self, dimension: str, metric: str) -> str:
+        """
+        生成友好的指标描述
+
+        Parameters:
+        -----------
+        dimension : str
+            分析维度
+        metric : str
+            指标名称
+
+        Returns:
+        --------
+        str
+            友好的描述
+        """
+        # 处理复杂的指标名称
+        if 'distribution_' in metric:
+            # 处理类似 distribution_工作日交易数 的指标
+            if '工作日交易数' in metric:
+                return '周一到周五期间的交易次数统计'
+            elif '周末交易数' in metric:
+                return '周六、周日期间的交易次数统计'
+            elif '工作时间交易数' in metric:
+                return '上午9点到下午5点期间的交易次数'
+            elif '非工作时间交易数' in metric:
+                return '下午5点到上午9点期间的交易次数'
             else:
-                return f"{dimension}的{metric}分析结果"
+                return f'关于{metric.replace("distribution_", "")}的分布统计'
+
+        # 处理元组形式的指标名称，如 ('交易日期', 'count')_1.0
+        if '(' in metric and ')' in metric:
+            if 'count' in metric:
+                return '交易次数的统计分析'
+            elif 'sum' in metric:
+                return '交易金额的汇总统计'
+            elif 'mean' in metric:
+                return '交易金额的平均值统计'
+            else:
+                return '数据的统计分析结果'
+
+        # 处理常见的指标类型
+        if '占比' in metric or '比例' in metric:
+            return f"{metric}的百分比统计"
+        elif '数量' in metric or '次数' in metric:
+            return f"{metric}的计数统计"
+        elif '金额' in metric:
+            return f"{metric}的金额统计"
+        elif '时间' in metric:
+            return f"{metric}的时间分析"
+        elif '分布' in metric:
+            return f"{metric}的分布情况"
+        elif '平均' in metric:
+            return f"{metric}的平均值"
+        elif '最大' in metric or '最小' in metric:
+            return f"{metric}的极值统计"
+        elif '总计' in metric or '合计' in metric:
+            return f"{metric}的汇总统计"
+        else:
+            return f"{metric}的分析结果"
 
     def _convert_dict_to_dataframe(self, data_dict: dict, analysis_type: str) -> pd.DataFrame:
         """

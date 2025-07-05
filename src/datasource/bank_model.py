@@ -114,14 +114,27 @@ class BankDataModel(BaseDataModel):
         # 确保日期列为日期类型
         if self.date_column in self.data.columns:
             self.data[self.date_column] = pd.to_datetime(self.data[self.date_column], errors='coerce')
-        
+
         # 确保金额列为数值类型
         if self.amount_column in self.data.columns:
             self.data[self.amount_column] = self._safe_to_numeric(self.data[self.amount_column])
-        
+
         # 确保账户余额列为数值类型
         if self.balance_column in self.data.columns:
             self.data[self.balance_column] = self._safe_to_numeric(self.data[self.balance_column])
+
+        # 确保可选字段存在（如果不存在则创建默认值）
+        if self.remark_column not in self.data.columns:
+            self.data[self.remark_column] = ''
+            self.logger.info(f"创建缺失的字段 '{self.remark_column}'")
+
+        if self.summary_column not in self.data.columns:
+            self.data[self.summary_column] = ''
+            self.logger.info(f"创建缺失的字段 '{self.summary_column}'")
+
+        if self.opposite_name_column not in self.data.columns:
+            self.data[self.opposite_name_column] = '未知'
+            self.logger.info(f"创建缺失的字段 '{self.opposite_name_column}'")
         
         # 3. 添加收入和支出列
         self.data['收入金额'] = 0.0

@@ -456,11 +456,19 @@ class WordExporter:
                  section_num += 1
                  has_content = True
         
-        # 特殊金额分析
+        # 特殊分析
         # Pass a copy of person_data to avoid side effects if the method modifies it
         special_amounts_df = analyzer.analyze_special_amounts(person_data.copy())
-        if not special_amounts_df.empty:
-            self._generate_special_amount_summary(doc, person_name, analyzer, special_amounts_df, "银行", section_num)
+        special_dates_df = analyzer.analyze_special_dates(person_data.copy())
+        if not special_amounts_df.empty or not special_dates_df.empty:
+            self._generate_special_analysis_summary(doc, person_name, analyzer, special_amounts_df, special_dates_df, "银行", section_num)
+            section_num += 1
+            has_content = True
+
+        # 整数金额分析
+        integer_amounts_df = analyzer.analyze_integer_amounts(person_data.copy())
+        if not integer_amounts_df.empty:
+            self._generate_integer_amount_summary(doc, person_name, analyzer, integer_amounts_df, "银行", section_num)
             section_num += 1
             has_content = True
 
@@ -489,10 +497,19 @@ class WordExporter:
             self._add_top_opponent_tables(doc, freq_df)
             has_content = True
         
-        # 特殊金额分析
+        # 特殊分析
         special_amounts_df = analyzer.analyze_special_amounts(person_data.copy())
-        if not special_amounts_df.empty:
-            self._generate_special_amount_summary(doc, person_name, analyzer, special_amounts_df, payment_type, section_num)
+        special_dates_df = analyzer.analyze_special_dates(person_data.copy())
+        if not special_amounts_df.empty or not special_dates_df.empty:
+            self._generate_special_analysis_summary(doc, person_name, analyzer, special_amounts_df, special_dates_df, payment_type, section_num)
+            section_num += 1
+            has_content = True
+
+        # 整数金额分析
+        platform_type = 'wechat' if payment_type == '微信' else 'alipay'
+        integer_amounts_df = analyzer.analyze_integer_amounts(person_data.copy(), platform_type)
+        if not integer_amounts_df.empty:
+            self._generate_integer_amount_summary(doc, person_name, analyzer, integer_amounts_df, payment_type, section_num)
             section_num += 1
             has_content = True
 
@@ -605,33 +622,35 @@ class WordExporter:
         top_months = monthly_counts.nlargest(3, '次数')
         major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
 
-        # 单笔主要金额，添加对方姓名
+        # 单笔主要金额，添加对方姓名，避免重复对象
         all_amounts = person_data.sort_values(by=data_model.amount_column, ascending=False)
         top_amounts_with_names = []
-        
-        # 跟踪已添加的金额，避免重复
-        added_amounts = set()
-        
-        # 获取前三笔金额，如果有重复金额则选择不同对手方
+
+        # 跟踪已添加的对象，避免重复
+        added_opponents = set()
+
+        # 获取前三笔金额，优先选择不同对手方
         for _, row in all_amounts.iterrows():
             amount = row[data_model.amount_column]
             opponent = row[data_model.opposite_name_column]
             opponent_str = str(opponent) if pd.notna(opponent) else "未知"
-            
-            # 格式化金额以便于比较
-            formatted_amount = f"{amount:.2f}"
-            
-            if formatted_amount not in added_amounts and len(top_amounts_with_names) < 3:
+
+            # 如果这个对手方还没有被添加过，或者已经有3个不同的对手方了
+            if opponent_str not in added_opponents and len(top_amounts_with_names) < 3:
+                formatted_amount = f"{amount:.2f}"
                 top_amounts_with_names.append(f"{formatted_amount}元（{opponent_str}）")
-                added_amounts.add(formatted_amount)
+                added_opponents.add(opponent_str)
         
         top_single_amounts = "、".join(top_amounts_with_names)
 
-        # 重复最多的金额
+        # 重复最多的金额（前三名）
         amount_counts = person_data[data_model.amount_column].value_counts()
-        most_frequent_amount = amount_counts.index[0]
-        most_frequent_count = amount_counts.iloc[0]
-        most_frequent_amount_info = f"{most_frequent_amount:.2f}元 ({most_frequent_count}次)"
+        top_frequent_amounts = []
+        for i in range(min(3, len(amount_counts))):
+            amount = amount_counts.index[i]
+            count = amount_counts.iloc[i]
+            top_frequent_amounts.append(f"{amount:.2f}元 ({count}次)")
+        most_frequent_amount_info = "、".join(top_frequent_amounts)
 
         # 生成概览段落，使用实际的换行而不是\n
         p = doc.add_paragraph()
@@ -641,9 +660,20 @@ class WordExporter:
         p.add_run(f"主要时间集中在：{major_time_str}。")
         p.add_run(f'单笔主要金额：{top_single_amounts}。')
 
-        if abs(most_frequent_amount) > 5000:
+        # 检查是否有大额金额需要加粗显示
+        has_large_amount = any(abs(amount_counts.index[i]) > 5000 for i in range(min(3, len(amount_counts))))
+
+        if has_large_amount:
             p.add_run('重复最多的金额为 ')
-            p.add_run(f'{most_frequent_amount_info}').bold = True
+            # 对大额金额加粗显示
+            for i, amount_info in enumerate(top_frequent_amounts):
+                amount = amount_counts.index[i]
+                if abs(amount) > 5000:
+                    p.add_run(amount_info).bold = True
+                else:
+                    p.add_run(amount_info)
+                if i < len(top_frequent_amounts) - 1:
+                    p.add_run('、')
             p.add_run('。')
         else:
             p.add_run(f'重复最多的金额为 {most_frequent_amount_info}。')
@@ -685,19 +715,28 @@ class WordExporter:
             major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
             p.add_run(f"主要时间集中在：{major_time_str}。")
 
-            # 单笔主要金额（重复最多的金额）
+            # 单笔主要金额（重复最多的金额前三名）
             amount_counts = person_cash_data[bank_model.amount_column].abs().value_counts()
             if not amount_counts.empty:
-                most_frequent_amount = amount_counts.index[0]
-                most_frequent_count = amount_counts.iloc[0]
-
                 # 在同一段落中添加
                 p.add_run("单笔主要金额：")
 
-                # 如果金额大于等于10000元，加粗显示
-                amount_run = p.add_run(f"{most_frequent_amount:.2f}元 ({most_frequent_count}次)")
-                if most_frequent_amount >= 10000:
-                    amount_run.bold = True
+                # 获取前三名重复最多的金额
+                top_frequent_amounts = []
+                for i in range(min(3, len(amount_counts))):
+                    amount = amount_counts.index[i]
+                    count = amount_counts.iloc[i]
+                    amount_text = f"{amount:.2f}元 ({count}次)"
+
+                    # 如果金额大于等于10000元，加粗显示
+                    if amount >= 10000:
+                        amount_run = p.add_run(amount_text)
+                        amount_run.bold = True
+                    else:
+                        p.add_run(amount_text)
+
+                    if i < min(3, len(amount_counts)) - 1:
+                        p.add_run("、")
 
                 p.add_run("。")
 
@@ -736,11 +775,14 @@ class WordExporter:
             top_date = top_transaction[bank_model.date_column].strftime('%Y年%m月%d日')
             p.add_run(f"其中，单笔最高{cash_type}金额为 {abs(top_amount):.2f}元，发生于{top_date}。")
 
-    def _generate_special_amount_summary(self, doc: Document, person_name: str, analyzer, special_amounts_df: pd.DataFrame, analysis_type_str: str, section_num: int):
-        """生成特殊金额分析的概要段落"""
+    def _generate_special_analysis_summary(self, doc: Document, person_name: str, analyzer, special_amounts_df: pd.DataFrame, special_dates_df: pd.DataFrame, analysis_type_str: str, section_num: int):
+        """生成特殊分析的概要段落"""
+        p = doc.add_paragraph()
+        p.add_run(f"{section_num}、特殊分析：").bold = True
+
+        # (1) 特殊金额
         if not special_amounts_df.empty:
-            p = doc.add_paragraph()
-            p.add_run(f"{section_num}、特殊金额：").bold = True
+            p.add_run("(1)特殊金额：")
 
             love_amounts = [520, 1314, 521]
             amount_col = analyzer.data_model.amount_column
@@ -821,6 +863,65 @@ class WordExporter:
                     p.add_run("、")
             
             p.add_run("。")
+        else:
+            p.add_run("(1)特殊金额：未发现特殊金额交易。")
+
+        # (2) 特殊日期
+        if not special_dates_df.empty:
+            p.add_run("(2)特殊日期：")
+
+            # 获取金额列
+            amount_col = analyzer.data_model.amount_column if hasattr(analyzer, 'data_model') else analyzer.bank_model.amount_column
+
+            # 按特殊日期名称分组，计算总额和次数
+            date_stats = special_dates_df.groupby('特殊日期名称').agg({
+                amount_col: ['sum', 'count']
+            }).reset_index()
+
+            # 重命名列
+            date_stats.columns = ['特殊日期名称', '总额', '次数']
+            date_stats['总额'] = date_stats['总额'].abs()  # 取绝对值
+
+            # 按总额排序，取前三名
+            top_dates = date_stats.nlargest(3, '总额')
+
+            date_descriptions = []
+            for _, row in top_dates.iterrows():
+                date_name = row['特殊日期名称']
+                total_amount = row['总额']
+                count = row['次数']
+                date_descriptions.append(f"{date_name}（总额{total_amount:.2f}元、{count}次）")
+
+            if date_descriptions:
+                p.add_run("、".join(date_descriptions) + "。")
+            else:
+                p.add_run("未发现特殊日期交易。")
+        else:
+            p.add_run("(2)特殊日期：未发现特殊日期交易。")
+
+    def _generate_integer_amount_summary(self, doc: Document, person_name: str, analyzer, integer_amounts_df: pd.DataFrame, analysis_type_str: str, section_num: int):
+        """生成整数金额分析的概要段落"""
+        if not integer_amounts_df.empty:
+            p = doc.add_paragraph()
+            p.add_run(f"{section_num}、整数金额：").bold = True
+
+            amount_col = analyzer.data_model.amount_column if hasattr(analyzer, 'data_model') else analyzer.bank_model.amount_column
+
+            # 统计整数金额的出现次数
+            amount_counts = integer_amounts_df[amount_col].abs().value_counts()
+
+            # 获取前三名出现次数最多的整数金额
+            top_integer_amounts = []
+            for i in range(min(3, len(amount_counts))):
+                amount = amount_counts.index[i]
+                count = amount_counts.iloc[i]
+                top_integer_amounts.append(f"{amount:.0f}元 ({count}次)")
+
+            total_times = len(integer_amounts_df)
+            integer_amounts_str = "、".join(top_integer_amounts)
+
+            p.add_run(f"{person_name}发生整数金额交易{total_times}次，")
+            p.add_run(f"出现次数最多的整数金额为：{integer_amounts_str}。")
 
     def _generate_key_transactions_summary(self, doc: Document, person_name: str, analyzer, person_data: pd.DataFrame, section_num: int):
         """生成重点收支分析的概要段落"""

@@ -121,6 +121,10 @@ class BankAnalyzer(BaseAnalyzer):
             if not special_amounts_result.empty:
                 results[f"{source_name}_特殊金额分析"] = special_amounts_result
 
+            integer_amounts_result = self.analyze_integer_amounts(source_data)
+            if not integer_amounts_result.empty:
+                results[f"{source_name}_整数金额分析"] = integer_amounts_result
+
         # 4. 高级分析
         if analysis_type in ['advanced', 'all']:
             advanced_results = self.analyze_advanced_patterns(source_data, source_name)
@@ -939,6 +943,34 @@ class BankAnalyzer(BaseAnalyzer):
         special_transactions = data[data[amount_col].abs().isin(special_amounts_config)].copy()
         
         return special_transactions
+
+    def analyze_integer_amounts(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        分析整数金额的交易
+
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            要分析的数据
+
+        Returns:
+        --------
+        pd.DataFrame
+            整数金额交易分析结果
+        """
+        integer_config = self.config.get('analysis', {}).get('integer_amount', {})
+        threshold = integer_config.get('bank_threshold', 1000)
+
+        if data.empty:
+            return pd.DataFrame()
+
+        amount_col = self.bank_model.amount_column
+
+        # 筛选出大于等于阈值的整数金额交易
+        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 1 == 0)
+        integer_transactions = data[integer_mask].copy()
+
+        return integer_transactions
 
     def get_top_transactions(self, data: pd.DataFrame, top_n: int = 10, by_income: bool = True) -> pd.DataFrame:
         """

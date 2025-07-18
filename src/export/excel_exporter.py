@@ -166,8 +166,15 @@ class ExcelExporter(BaseExporter):
                     if call_frequency_dfs:
                         combined_call_df = pd.concat(call_frequency_dfs, ignore_index=True)
                         base_cols = ['平台', '数据来源', '本方姓名', '对方姓名']
-                        other_cols = [col for col in combined_call_df.columns if col not in base_cols]
-                        final_cols = base_cols + other_cols
+
+                        # 在对方姓名后面添加对方详细信息字段
+                        detail_cols = []
+                        for field in ['对方号码', '对方单位名称', '对方职务']:
+                            if field in combined_call_df.columns:
+                                detail_cols.append(field)
+
+                        other_cols = [col for col in combined_call_df.columns if col not in base_cols + detail_cols]
+                        final_cols = base_cols + detail_cols + other_cols
                         combined_call_df = combined_call_df[[col for col in final_cols if col in combined_call_df.columns]]
 
                         combined_call_df.to_excel(writer, sheet_name='话单类频率表', index=False)
@@ -862,19 +869,25 @@ class ExcelExporter(BaseExporter):
             special_amount_data['分析类型'] = '特殊金额'
             all_raw_data.append(special_amount_data)
 
-        # 5. 特殊日期数据（从分析结果中获取）
+        # 5. 整数金额数据（从分析结果中获取）
+        integer_amount_data = self._get_special_data_from_results(analysis_results, '整数金额', '银行')
+        if not integer_amount_data.empty:
+            integer_amount_data['分析类型'] = '整数金额'
+            all_raw_data.append(integer_amount_data)
+
+        # 6. 特殊日期数据（从分析结果中获取）
         special_date_data = self._get_special_data_from_results(analysis_results, '特殊日期', '银行')
         if not special_date_data.empty:
             special_date_data['分析类型'] = '特殊日期'
             all_raw_data.append(special_date_data)
 
-        # 6. 重点收入数据（从分析结果中获取）
+        # 7. 重点收入数据（从分析结果中获取）
         key_income_data = self._get_key_transaction_data(bank_model, '收入')
         if not key_income_data.empty:
             key_income_data['分析类型'] = '重点收入'
             all_raw_data.append(key_income_data)
 
-        # 7. 重点支出数据（从分析结果中获取）
+        # 8. 重点支出数据（从分析结果中获取）
         key_expense_data = self._get_key_transaction_data(bank_model, '支出')
         if not key_expense_data.empty:
             key_expense_data['分析类型'] = '重点支出'
@@ -908,19 +921,25 @@ class ExcelExporter(BaseExporter):
             special_amount_data['分析类型'] = '特殊金额'
             all_raw_data.append(special_amount_data)
 
-        # 3. 特殊日期数据（从分析结果中获取）
+        # 3. 整数金额数据（从分析结果中获取）
+        integer_amount_data = self._get_special_data_from_results(analysis_results, '整数金额', platform_name)
+        if not integer_amount_data.empty:
+            integer_amount_data['分析类型'] = '整数金额'
+            all_raw_data.append(integer_amount_data)
+
+        # 4. 特殊日期数据（从分析结果中获取）
         special_date_data = self._get_special_data_from_results(analysis_results, '特殊日期', platform_name)
         if not special_date_data.empty:
             special_date_data['分析类型'] = '特殊日期'
             all_raw_data.append(special_date_data)
 
-        # 4. 重点收入数据
+        # 5. 重点收入数据
         key_income_data = self._get_key_transaction_data(payment_model, '收入')
         if not key_income_data.empty:
             key_income_data['分析类型'] = '重点收入'
             all_raw_data.append(key_income_data)
 
-        # 5. 重点支出数据
+        # 6. 重点支出数据
         key_expense_data = self._get_key_transaction_data(payment_model, '支出')
         if not key_expense_data.empty:
             key_expense_data['分析类型'] = '重点支出'

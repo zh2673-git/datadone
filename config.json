@@ -619,6 +619,11 @@
                 "圣诞节": { "type": "solar", "month": 12, "day": 25 }
             }
         },
+        "integer_amount": {
+            "bank_threshold": 1000,
+            "wechat_threshold": 200,
+            "alipay_threshold": 200
+        },
         "special_amount": {
             "amounts": [
                 6.66,

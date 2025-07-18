@@ -115,6 +115,12 @@ class PaymentAnalyzer(BaseAnalyzer):
             if not special_amounts_result.empty:
                 results[f"{source_name}_{payment_type}特殊金额分析"] = special_amounts_result
 
+            # 确定平台类型
+            platform_type = 'wechat' if hasattr(self.payment_model, 'account_column') else 'alipay'
+            integer_amounts_result = self.analyze_integer_amounts(source_data, platform_type)
+            if not integer_amounts_result.empty:
+                results[f"{source_name}_整数金额分析"] = integer_amounts_result
+
         return results
 
     def analyze_frequency(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -241,6 +247,37 @@ class PaymentAnalyzer(BaseAnalyzer):
         special_transactions = data[data[amount_col].abs().isin(special_amounts_config)].copy()
         
         return special_transactions
+
+    def analyze_integer_amounts(self, data: pd.DataFrame, platform_type: str = 'wechat') -> pd.DataFrame:
+        """
+        分析整数金额的交易
+
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            要分析的数据
+        platform_type : str
+            平台类型，'wechat' 或 'alipay'
+
+        Returns:
+        --------
+        pd.DataFrame
+            整数金额交易分析结果
+        """
+        integer_config = self.config.get('analysis', {}).get('integer_amount', {})
+        threshold_key = f'{platform_type}_threshold'
+        threshold = integer_config.get(threshold_key, 200)
+
+        if data.empty:
+            return pd.DataFrame()
+
+        amount_col = self.payment_model.amount_column
+
+        # 筛选出大于等于阈值的整数金额交易
+        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 1 == 0)
+        integer_transactions = data[integer_mask].copy()
+
+        return integer_transactions
     
     def analyze_by_person(self, person_name: str) -> pd.DataFrame:
         """

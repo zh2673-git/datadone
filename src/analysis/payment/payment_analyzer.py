@@ -250,7 +250,7 @@ class PaymentAnalyzer(BaseAnalyzer):
 
     def analyze_integer_amounts(self, data: pd.DataFrame, platform_type: str = 'wechat') -> pd.DataFrame:
         """
-        分析整数金额的交易
+        分析整百数金额的交易
 
         Parameters:
         -----------
@@ -262,7 +262,7 @@ class PaymentAnalyzer(BaseAnalyzer):
         Returns:
         --------
         pd.DataFrame
-            整数金额交易分析结果
+            整百数金额交易分析结果
         """
         integer_config = self.config.get('analysis', {}).get('integer_amount', {})
         threshold_key = f'{platform_type}_threshold'
@@ -273,8 +273,8 @@ class PaymentAnalyzer(BaseAnalyzer):
 
         amount_col = self.payment_model.amount_column
 
-        # 筛选出大于等于阈值的整数金额交易
-        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 1 == 0)
+        # 筛选出大于等于阈值的整百数金额交易（能被100整除）
+        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 100 == 0)
         integer_transactions = data[integer_mask].copy()
 
         return integer_transactions

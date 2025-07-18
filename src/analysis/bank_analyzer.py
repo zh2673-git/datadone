@@ -946,7 +946,7 @@ class BankAnalyzer(BaseAnalyzer):
 
     def analyze_integer_amounts(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        分析整数金额的交易
+        分析整百数金额的交易
 
         Parameters:
         -----------
@@ -956,7 +956,7 @@ class BankAnalyzer(BaseAnalyzer):
         Returns:
         --------
         pd.DataFrame
-            整数金额交易分析结果
+            整百数金额交易分析结果
         """
         integer_config = self.config.get('analysis', {}).get('integer_amount', {})
         threshold = integer_config.get('bank_threshold', 1000)
@@ -966,8 +966,8 @@ class BankAnalyzer(BaseAnalyzer):
 
         amount_col = self.bank_model.amount_column
 
-        # 筛选出大于等于阈值的整数金额交易
-        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 1 == 0)
+        # 筛选出大于等于阈值的整百数金额交易（能被100整除）
+        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 100 == 0)
         integer_transactions = data[integer_mask].copy()
 
         return integer_transactions

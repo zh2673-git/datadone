@@ -872,7 +872,7 @@ class ExcelExporter(BaseExporter):
         # 5. 整数金额数据（从分析结果中获取）
         integer_amount_data = self._get_special_data_from_results(analysis_results, '整数金额', '银行')
         if not integer_amount_data.empty:
-            integer_amount_data['分析类型'] = '整数金额'
+            integer_amount_data['分析类型'] = '整百数金额'
             all_raw_data.append(integer_amount_data)
 
         # 6. 特殊日期数据（从分析结果中获取）
@@ -924,7 +924,7 @@ class ExcelExporter(BaseExporter):
         # 3. 整数金额数据（从分析结果中获取）
         integer_amount_data = self._get_special_data_from_results(analysis_results, '整数金额', platform_name)
         if not integer_amount_data.empty:
-            integer_amount_data['分析类型'] = '整数金额'
+            integer_amount_data['分析类型'] = '整百数金额'
             all_raw_data.append(integer_amount_data)
 
         # 4. 特殊日期数据（从分析结果中获取）

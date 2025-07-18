@@ -900,17 +900,17 @@ class WordExporter:
             p.add_run("(2)特殊日期：未发现特殊日期交易。")
 
     def _generate_integer_amount_summary(self, doc: Document, person_name: str, analyzer, integer_amounts_df: pd.DataFrame, analysis_type_str: str, section_num: int):
-        """生成整数金额分析的概要段落"""
+        """生成整百数金额分析的概要段落"""
         if not integer_amounts_df.empty:
             p = doc.add_paragraph()
             p.add_run(f"{section_num}、整数金额：").bold = True
 
             amount_col = analyzer.data_model.amount_column if hasattr(analyzer, 'data_model') else analyzer.bank_model.amount_column
 
-            # 统计整数金额的出现次数
+            # 统计整百数金额的出现次数
             amount_counts = integer_amounts_df[amount_col].abs().value_counts()
 
-            # 获取前三名出现次数最多的整数金额
+            # 获取前三名出现次数最多的整百数金额
             top_integer_amounts = []
             for i in range(min(3, len(amount_counts))):
                 amount = amount_counts.index[i]
@@ -920,8 +920,8 @@ class WordExporter:
             total_times = len(integer_amounts_df)
             integer_amounts_str = "、".join(top_integer_amounts)
 
-            p.add_run(f"{person_name}发生整数金额交易{total_times}次，")
-            p.add_run(f"出现次数最多的整数金额为：{integer_amounts_str}。")
+            p.add_run(f"{person_name}发生整百数金额交易{total_times}次，")
+            p.add_run(f"出现次数最多的整百数金额为：{integer_amounts_str}。")
 
     def _generate_key_transactions_summary(self, doc: Document, person_name: str, analyzer, person_data: pd.DataFrame, section_num: int):
         """生成重点收支分析的概要段落"""

@@ -167,11 +167,18 @@ class ExcelExporter(BaseExporter):
                         combined_call_df = pd.concat(call_frequency_dfs, ignore_index=True)
                         base_cols = ['平台', '数据来源', '本方姓名', '对方姓名']
 
-                        # 在对方姓名后面添加对方详细信息字段
+                        # 在对方姓名后面添加对方详细信息字段，优先使用带lambda后缀的字段
                         detail_cols = []
-                        for field in ['对方号码', '对方单位名称', '对方职务']:
-                            if field in combined_call_df.columns:
-                                detail_cols.append(field)
+                        if '对方号码' in combined_call_df.columns:
+                            detail_cols.append('对方号码')
+                        if '对方单位名称_<lambda>' in combined_call_df.columns:
+                            detail_cols.append('对方单位名称_<lambda>')
+                        elif '对方单位名称' in combined_call_df.columns:
+                            detail_cols.append('对方单位名称')
+                        if '对方职务_<lambda>' in combined_call_df.columns:
+                            detail_cols.append('对方职务_<lambda>')
+                        elif '对方职务' in combined_call_df.columns:
+                            detail_cols.append('对方职务')
 
                         other_cols = [col for col in combined_call_df.columns if col not in base_cols + detail_cols]
                         final_cols = base_cols + detail_cols + other_cols
@@ -665,9 +672,14 @@ class ExcelExporter(BaseExporter):
         # 安全地添加可选字段
         if '对方号码' in call_df.columns:
             agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        if '对方单位名称' in call_df.columns:
+        # 检查带lambda后缀的字段名（来自话单频率分析）
+        if '对方单位名称_<lambda>' in call_df.columns:
+            agg_dict['对方单位名称_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        elif '对方单位名称' in call_df.columns:
             agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        if '对方职务' in call_df.columns:
+        if '对方职务_<lambda>' in call_df.columns:
+            agg_dict['对方职务_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        elif '对方职务' in call_df.columns:
             agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
 
         call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
@@ -690,19 +702,30 @@ class ExcelExporter(BaseExporter):
         # 安全地填充可选字段的空值
         if '对方号码' in merged_df.columns:
             merged_df['对方号码'] = merged_df['对方号码'].fillna('')
-        if '对方单位名称' in merged_df.columns:
+        if '对方单位名称_<lambda>' in merged_df.columns:
+            merged_df['对方单位名称_<lambda>'] = merged_df['对方单位名称_<lambda>'].fillna('')
+        elif '对方单位名称' in merged_df.columns:
             merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
-        if '对方职务' in merged_df.columns:
+        if '对方职务_<lambda>' in merged_df.columns:
+            merged_df['对方职务_<lambda>'] = merged_df['对方职务_<lambda>'].fillna('')
+        elif '对方职务' in merged_df.columns:
             merged_df['对方职务'] = merged_df['对方职务'].fillna('')
 
         # 重新排列列的顺序，将对方详细信息放在对方姓名后面
         base_columns = ['本方姓名', '对方姓名']
         detail_columns = []
 
-        # 安全地添加存在的详细信息字段
-        for field in ['对方号码', '对方单位名称', '对方职务']:
-            if field in merged_df.columns:
-                detail_columns.append(field)
+        # 安全地添加存在的详细信息字段，优先使用带lambda后缀的字段
+        if '对方号码' in merged_df.columns:
+            detail_columns.append('对方号码')
+        if '对方单位名称_<lambda>' in merged_df.columns:
+            detail_columns.append('对方单位名称_<lambda>')
+        elif '对方单位名称' in merged_df.columns:
+            detail_columns.append('对方单位名称')
+        if '对方职务_<lambda>' in merged_df.columns:
+            detail_columns.append('对方职务_<lambda>')
+        elif '对方职务' in merged_df.columns:
+            detail_columns.append('对方职务')
 
         other_columns = [col for col in merged_df.columns if col not in base_columns + detail_columns]
         merged_df = merged_df[base_columns + detail_columns + other_columns]
@@ -755,9 +778,14 @@ class ExcelExporter(BaseExporter):
         # 安全地添加可选字段
         if '对方号码' in call_df.columns:
             agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        if '对方单位名称' in call_df.columns:
+        # 检查带lambda后缀的字段名（来自话单频率分析）
+        if '对方单位名称_<lambda>' in call_df.columns:
+            agg_dict['对方单位名称_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        elif '对方单位名称' in call_df.columns:
             agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        if '对方职务' in call_df.columns:
+        if '对方职务_<lambda>' in call_df.columns:
+            agg_dict['对方职务_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+        elif '对方职务' in call_df.columns:
             agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
 
         call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
@@ -777,19 +805,30 @@ class ExcelExporter(BaseExporter):
         # 安全地填充可选字段的空值
         if '对方号码' in merged_df.columns:
             merged_df['对方号码'] = merged_df['对方号码'].fillna('')
-        if '对方单位名称' in merged_df.columns:
+        if '对方单位名称_<lambda>' in merged_df.columns:
+            merged_df['对方单位名称_<lambda>'] = merged_df['对方单位名称_<lambda>'].fillna('')
+        elif '对方单位名称' in merged_df.columns:
             merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
-        if '对方职务' in merged_df.columns:
+        if '对方职务_<lambda>' in merged_df.columns:
+            merged_df['对方职务_<lambda>'] = merged_df['对方职务_<lambda>'].fillna('')
+        elif '对方职务' in merged_df.columns:
             merged_df['对方职务'] = merged_df['对方职务'].fillna('')
 
         # 重新排列列的顺序，将对方详细信息放在对方姓名后面
         base_columns = ['本方姓名', '对方姓名']
         detail_columns = []
 
-        # 安全地添加存在的详细信息字段
-        for field in ['对方号码', '对方单位名称', '对方职务']:
-            if field in merged_df.columns:
-                detail_columns.append(field)
+        # 安全地添加存在的详细信息字段，优先使用带lambda后缀的字段
+        if '对方号码' in merged_df.columns:
+            detail_columns.append('对方号码')
+        if '对方单位名称_<lambda>' in merged_df.columns:
+            detail_columns.append('对方单位名称_<lambda>')
+        elif '对方单位名称' in merged_df.columns:
+            detail_columns.append('对方单位名称')
+        if '对方职务_<lambda>' in merged_df.columns:
+            detail_columns.append('对方职务_<lambda>')
+        elif '对方职务' in merged_df.columns:
+            detail_columns.append('对方职务')
 
         other_columns = [col for col in merged_df.columns if col not in base_columns + detail_columns]
         merged_df = merged_df[base_columns + detail_columns + other_columns]

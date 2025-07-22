@@ -122,8 +122,10 @@ class ComprehensiveAnalyzer:
                 global_contact_map = contact_info.drop_duplicates('对方姓名').set_index('对方姓名')[unit_col].to_dict()
                 self.logger.info(f"已从话单数据中创建包含 {len(global_contact_map)} 个联系人的全局单位映射。")
 
-        # 3. 为每个可用的数据源生成综合分析结果
+        # 3. 生成综合分析结果 - 修改逻辑以支持跨数据源的对手信息交叉比对
         final_results = {}
+
+        # 为每个可用的数据源生成综合分析结果
         for source_type in all_frequency_dfs.keys():
             base_df = all_frequency_dfs[source_type]
             if base_df is None or base_df.empty:
@@ -133,10 +135,7 @@ class ComprehensiveAnalyzer:
             other_dfs = {k: v for k, v in all_frequency_dfs.items()
                          if k != source_type}
 
-            # 获取基础数据源的对方姓名列表
-            base_names = base_df[['本方姓名', '对方姓名']].drop_duplicates()
-
-            # 对每个其他数据源进行匹配
+            # 以基础数据源为主体，不创建额外组合
             merged_df = base_df.copy()
 
             # 确保基础数据源的金额和次数列正确命名
@@ -149,30 +148,72 @@ class ComprehensiveAnalyzer:
             elif source_type == 'call':
                 merged_df['通话次数'] = merged_df['通话次数']
 
+            # 对每个其他数据源进行匹配
             for other_type, other_df in other_dfs.items():
-                # 基于基础数据源的对方姓名进行匹配
-                matched_df = pd.merge(
-                    base_names,
+                if other_df is None or other_df.empty:
+                    continue
+
+                # 首先尝试完全匹配（本方姓名+对方姓名）
+                exact_matched_df = pd.merge(
+                    merged_df[['本方姓名', '对方姓名']].drop_duplicates(),
                     other_df,
                     on=['本方姓名', '对方姓名'],
                     how='left'
                 )
 
-                if not matched_df.empty:
+                # 然后尝试只基于对方姓名匹配（跨人员匹配）
+                # 对于没有完全匹配的记录，尝试基于对方姓名匹配
+                base_contacts = merged_df[['本方姓名', '对方姓名']].drop_duplicates()
+
+                # 创建其他数据源的对方姓名汇总（按对方姓名聚合所有相关信息）
+                if other_type == 'call':
+                    # 话单数据按对方姓名聚合，保留单位信息
+                    agg_dict = {
+                        '通话次数': 'sum'
+                    }
+                    # 检查通话时长列名
+                    if '通话总时长(分钟)' in other_df.columns:
+                        agg_dict['通话总时长(分钟)'] = 'sum'
+                    elif '通话时长' in other_df.columns:
+                        agg_dict['通话时长'] = 'sum'
+                    if '对方单位名称_<lambda>' in other_df.columns:
+                        agg_dict['对方单位名称_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+                    elif '对方单位名称' in other_df.columns:
+                        agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+
+                    contact_summary = other_df.groupby('对方姓名').agg(agg_dict).reset_index()
+                else:
+                    # 账单数据按对方姓名聚合
+                    contact_summary = other_df.groupby('对方姓名').agg({
+                        '交易总金额': 'sum',
+                        '交易次数': 'sum'
+                    }).reset_index()
+
+                # 基于对方姓名进行匹配
+                cross_matched_df = pd.merge(
+                    base_contacts,
+                    contact_summary,
+                    on='对方姓名',
+                    how='left'
+                )
+
+                if not cross_matched_df.empty:
                     # 根据数据源类型，添加相应的总额或次数列
                     if other_type == 'bank':
-                        matched_df['银行总额'] = matched_df['交易总金额']
+                        cross_matched_df['银行总额'] = cross_matched_df['交易总金额']
                     elif other_type == 'wechat':
-                        matched_df['微信总额'] = matched_df['交易总金额']
+                        cross_matched_df['微信总额'] = cross_matched_df['交易总金额']
                     elif other_type == 'alipay':
-                        matched_df['支付宝总额'] = matched_df['交易总金额']
+                        cross_matched_df['支付宝总额'] = cross_matched_df['交易总金额']
                     elif other_type == 'call':
-                        matched_df['通话次数'] = matched_df['通话次数']
+                        cross_matched_df['通话次数'] = cross_matched_df['通话次数']
 
                     # 合并结果
                     merge_cols = ['本方姓名', '对方姓名']
-                    if '对方单位名称_<lambda>' in matched_df.columns:
+                    if '对方单位名称_<lambda>' in cross_matched_df.columns:
                         merge_cols.append('对方单位名称_<lambda>')
+                    elif '对方单位名称' in cross_matched_df.columns:
+                        merge_cols.append('对方单位名称')
                     if other_type == 'bank':
                         merge_cols.append('银行总额')
                     elif other_type == 'wechat':
@@ -184,7 +225,7 @@ class ComprehensiveAnalyzer:
 
                     merged_df = pd.merge(
                         merged_df,
-                        matched_df[merge_cols],
+                        cross_matched_df[merge_cols],
                         on=['本方姓名', '对方姓名'],
                         how='left',
                         suffixes=('', f'_{other_type}')

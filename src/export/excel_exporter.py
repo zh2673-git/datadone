@@ -578,8 +578,8 @@ class ExcelExporter(BaseExporter):
         # 确保必要的字段存在
         if '通话次数' not in df_copy.columns:
             df_copy['通话次数'] = 0
-        if '通话时长' not in df_copy.columns:
-            df_copy['通话时长'] = 0
+        if '通话总时长(分钟)' not in df_copy.columns and '通话时长' not in df_copy.columns:
+            df_copy['通话总时长(分钟)'] = 0
 
         # 计算通话占比
         total_calls = df_copy['通话次数'].sum()
@@ -644,7 +644,9 @@ class ExcelExporter(BaseExporter):
             self.logger.info("已生成综合分析表")
 
     def _cross_analyze_with_call_base(self, call_df: pd.DataFrame, bill_df: pd.DataFrame) -> pd.DataFrame:
-        """以话单为基准进行交叉分析"""
+        """以话单为基准进行交叉分析，支持跨数据源对手信息显示"""
+        # 以话单数据为基础，不创建额外组合
+
         # 基于对方姓名进行匹配，并计算各平台的金额分布
         bill_platform_summary = bill_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
             '收入总额': 'sum',
@@ -687,14 +689,22 @@ class ExcelExporter(BaseExporter):
                 platform_individual_data[platform] = platform_summary
 
         # 合并总金额和平台详情
-        bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
+        if not bill_total_summary.empty and not platform_details.empty:
+            bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
+        else:
+            bill_summary_with_details = bill_total_summary.copy() if not bill_total_summary.empty else pd.DataFrame()
 
         # 获取话单中的对方详细信息
         agg_dict = {
             '通话次数': 'sum',
-            '通话时长': 'sum',
             '数据来源': 'first'
         }
+
+        # 检查通话时长列名
+        if '通话总时长(分钟)' in call_df.columns:
+            agg_dict['通话总时长(分钟)'] = 'sum'
+        elif '通话时长' in call_df.columns:
+            agg_dict['通话时长'] = 'sum'
 
         # 安全地添加可选字段
         if '对方号码' in call_df.columns:
@@ -711,22 +721,87 @@ class ExcelExporter(BaseExporter):
 
         call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
 
-        # 与话单数据合并
-        merged_df = pd.merge(
-            call_details,
-            bill_summary_with_details,
-            on=['本方姓名', '对方姓名'],
-            how='left'
-        )
+        # 以话单数据为基础进行合并
+        merged_df = call_details.copy()
 
-        # 与各平台独立数据合并
+        # 与账单数据合并 - 支持跨人员匹配
+        if not bill_summary_with_details.empty:
+            # 首先尝试完全匹配
+            merged_df = pd.merge(
+                merged_df,
+                bill_summary_with_details,
+                on=['本方姓名', '对方姓名'],
+                how='left'
+            )
+
+            # 对于没有匹配到的记录，尝试基于对方姓名匹配
+            # 创建账单数据的对方姓名汇总
+            bill_contact_summary = bill_summary_with_details.groupby('对方姓名').agg({
+                '收入总额': 'sum',
+                '支出总额': 'sum',
+                '交易次数': 'sum',
+                '平台': lambda x: '、'.join(x.unique()),
+                '平台金额分布': lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
+            }).reset_index()
+
+            # 找出没有账单数据的话单记录
+            no_bill_mask = merged_df['收入总额'].isna()
+            if no_bill_mask.any():
+                # 基于对方姓名进行跨人员匹配
+                cross_match = pd.merge(
+                    merged_df[no_bill_mask][['本方姓名', '对方姓名']],
+                    bill_contact_summary,
+                    on='对方姓名',
+                    how='left'
+                )
+
+                # 更新没有匹配到的记录
+                for idx, row in cross_match.iterrows():
+                    if pd.notna(row['收入总额']):
+                        mask = (merged_df['本方姓名'] == row['本方姓名']) & (merged_df['对方姓名'] == row['对方姓名'])
+                        merged_df.loc[mask, '收入总额'] = row['收入总额']
+                        merged_df.loc[mask, '支出总额'] = row['支出总额']
+                        merged_df.loc[mask, '交易次数'] = row['交易次数']
+                        merged_df.loc[mask, '平台'] = row['平台']
+                        merged_df.loc[mask, '平台金额分布'] = row['平台金额分布']
+
+        # 与各平台独立数据合并 - 支持跨人员匹配
         for platform, platform_data in platform_individual_data.items():
+            # 首先尝试完全匹配
             merged_df = pd.merge(
                 merged_df,
                 platform_data,
                 on=['本方姓名', '对方姓名'],
                 how='left'
             )
+
+            # 对于没有匹配到的记录，尝试基于对方姓名匹配
+            platform_contact_summary = platform_data.groupby('对方姓名').agg({
+                f'{platform}_收入总额': 'sum',
+                f'{platform}_支出总额': 'sum',
+                f'{platform}_交易次数': 'sum'
+            }).reset_index()
+
+            # 找出没有该平台数据的话单记录
+            platform_col = f'{platform}_收入总额'
+            if platform_col in merged_df.columns:
+                no_platform_mask = merged_df[platform_col].isna()
+                if no_platform_mask.any():
+                    # 基于对方姓名进行跨人员匹配
+                    cross_match = pd.merge(
+                        merged_df[no_platform_mask][['本方姓名', '对方姓名']],
+                        platform_contact_summary,
+                        on='对方姓名',
+                        how='left'
+                    )
+
+                    # 更新没有匹配到的记录
+                    for idx, row in cross_match.iterrows():
+                        if pd.notna(row[f'{platform}_收入总额']):
+                            mask = (merged_df['本方姓名'] == row['本方姓名']) & (merged_df['对方姓名'] == row['对方姓名'])
+                            merged_df.loc[mask, f'{platform}_收入总额'] = row[f'{platform}_收入总额']
+                            merged_df.loc[mask, f'{platform}_支出总额'] = row[f'{platform}_支出总额']
+                            merged_df.loc[mask, f'{platform}_交易次数'] = row[f'{platform}_交易次数']
 
         # 填充空值
         merged_df['收入总额'] = merged_df['收入总额'].fillna(0)
@@ -772,7 +847,9 @@ class ExcelExporter(BaseExporter):
         call_columns = []
         if '通话次数' in merged_df.columns:
             call_columns.append('通话次数')
-        if '通话时长' in merged_df.columns:
+        if '通话总时长(分钟)' in merged_df.columns:
+            call_columns.append('通话总时长(分钟)')
+        elif '通话时长' in merged_df.columns:
             call_columns.append('通话时长')
         if '数据来源' in merged_df.columns:
             call_columns.append('数据来源')
@@ -938,9 +1015,14 @@ class ExcelExporter(BaseExporter):
         if not call_df.empty:
             # 获取话单中的对方详细信息
             agg_dict = {
-                '通话次数': 'sum',
-                '通话时长': 'sum'
+                '通话次数': 'sum'
             }
+
+            # 检查通话时长列名
+            if '通话总时长(分钟)' in call_df.columns:
+                agg_dict['通话总时长(分钟)'] = 'sum'
+            elif '通话时长' in call_df.columns:
+                agg_dict['通话时长'] = 'sum'
 
             # 安全地添加可选字段
             if '对方号码' in call_df.columns:
@@ -1003,7 +1085,9 @@ class ExcelExporter(BaseExporter):
             merged_df['其他账单平台金额分布'] = merged_df['其他账单平台金额分布'].fillna('无')
         if '通话次数' in merged_df.columns:
             merged_df['通话次数'] = merged_df['通话次数'].fillna(0)
-        if '通话时长' in merged_df.columns:
+        if '通话总时长(分钟)' in merged_df.columns:
+            merged_df['通话总时长(分钟)'] = merged_df['通话总时长(分钟)'].fillna(0)
+        elif '通话时长' in merged_df.columns:
             merged_df['通话时长'] = merged_df['通话时长'].fillna(0)
         if '数据来源' in merged_df.columns:
             merged_df['数据来源'] = merged_df['数据来源'].fillna('未知')
@@ -1056,7 +1140,9 @@ class ExcelExporter(BaseExporter):
         call_columns = []
         if '通话次数' in merged_df.columns:
             call_columns.append('通话次数')
-        if '通话时长' in merged_df.columns:
+        if '通话总时长(分钟)' in merged_df.columns:
+            call_columns.append('通话总时长(分钟)')
+        elif '通话时长' in merged_df.columns:
             call_columns.append('通话时长')
 
         # 其他信息列
@@ -1094,7 +1180,9 @@ class ExcelExporter(BaseExporter):
         return '; '.join(details) if details else '无'
 
     def _cross_analyze_with_bill_base(self, bill_df: pd.DataFrame, call_df: pd.DataFrame) -> pd.DataFrame:
-        """以账单类为基准进行交叉分析"""
+        """以账单类为基准进行交叉分析，支持跨数据源对手信息显示"""
+        # 以账单数据为基础，不创建额外组合
+
         # 对账单类数据按对方姓名进行金额累计和去重，并计算平台分布
         bill_platform_summary = bill_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
             '收入总额': 'sum',
@@ -1137,13 +1225,21 @@ class ExcelExporter(BaseExporter):
                 platform_individual_data[platform] = platform_summary
 
         # 合并总金额和平台详情
-        bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
+        if not bill_total_summary.empty and not platform_details.empty:
+            bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
+        else:
+            bill_summary_with_details = bill_total_summary.copy() if not bill_total_summary.empty else pd.DataFrame()
 
         # 获取话单中的对方详细信息
         agg_dict = {
-            '通话次数': 'sum',
-            '通话时长': 'sum'
+            '通话次数': 'sum'
         }
+
+        # 检查通话时长列名
+        if '通话总时长(分钟)' in call_df.columns:
+            agg_dict['通话总时长(分钟)'] = 'sum'
+        elif '通话时长' in call_df.columns:
+            agg_dict['通话时长'] = 'sum'
 
         # 安全地添加可选字段
         if '对方号码' in call_df.columns:
@@ -1160,13 +1256,77 @@ class ExcelExporter(BaseExporter):
 
         call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
 
-        # 与话单数据合并
-        merged_df = pd.merge(
-            bill_summary_with_details,
-            call_details,
-            on=['本方姓名', '对方姓名'],
-            how='left'
-        )
+        # 以账单数据为基础进行合并
+        if not bill_summary_with_details.empty:
+            merged_df = bill_summary_with_details.copy()
+        else:
+            merged_df = pd.DataFrame()
+
+        # 与话单数据合并 - 支持跨人员匹配
+        if not call_details.empty and not merged_df.empty:
+            # 首先尝试完全匹配
+            merged_df = pd.merge(
+                merged_df,
+                call_details,
+                on=['本方姓名', '对方姓名'],
+                how='left'
+            )
+
+            # 对于没有匹配到的记录，尝试基于对方姓名匹配
+            # 创建话单数据的对方姓名汇总
+            call_agg_dict = {
+                '通话次数': 'sum'
+            }
+            # 检查通话时长列名
+            if '通话总时长(分钟)' in call_details.columns:
+                call_agg_dict['通话总时长(分钟)'] = 'sum'
+            elif '通话时长' in call_details.columns:
+                call_agg_dict['通话时长'] = 'sum'
+
+            call_contact_summary = call_details.groupby('对方姓名').agg(call_agg_dict).reset_index()
+
+            # 添加单位信息字段
+            if '对方单位名称_<lambda>' in call_details.columns:
+                call_contact_summary = pd.merge(
+                    call_contact_summary,
+                    call_details.groupby('对方姓名')['对方单位名称_<lambda>'].first().reset_index(),
+                    on='对方姓名'
+                )
+            elif '对方单位名称' in call_details.columns:
+                call_contact_summary = pd.merge(
+                    call_contact_summary,
+                    call_details.groupby('对方姓名')['对方单位名称'].first().reset_index(),
+                    on='对方姓名'
+                )
+
+            # 找出没有话单数据的账单记录
+            no_call_mask = merged_df['通话次数'].isna()
+            if no_call_mask.any():
+                # 基于对方姓名进行跨人员匹配
+                cross_match = pd.merge(
+                    merged_df[no_call_mask][['本方姓名', '对方姓名']],
+                    call_contact_summary,
+                    on='对方姓名',
+                    how='left'
+                )
+
+                # 更新没有匹配到的记录
+                for idx, row in cross_match.iterrows():
+                    if pd.notna(row['通话次数']):
+                        mask = (merged_df['本方姓名'] == row['本方姓名']) & (merged_df['对方姓名'] == row['对方姓名'])
+                        merged_df.loc[mask, '通话次数'] = row['通话次数']
+
+                        # 更新通话时长（检查列名）
+                        if '通话总时长(分钟)' in row and pd.notna(row['通话总时长(分钟)']):
+                            merged_df.loc[mask, '通话总时长(分钟)'] = row['通话总时长(分钟)']
+                        elif '通话时长' in row and pd.notna(row['通话时长']):
+                            merged_df.loc[mask, '通话时长'] = row['通话时长']
+
+                        # 更新单位信息
+                        if '对方单位名称_<lambda>' in row and pd.notna(row['对方单位名称_<lambda>']):
+                            merged_df.loc[mask, '对方单位名称_<lambda>'] = row['对方单位名称_<lambda>']
+                        elif '对方单位名称' in row and pd.notna(row['对方单位名称']):
+                            merged_df.loc[mask, '对方单位名称'] = row['对方单位名称']
 
         # 与各平台独立数据合并
         for platform, platform_data in platform_individual_data.items():
@@ -1179,7 +1339,10 @@ class ExcelExporter(BaseExporter):
 
         # 填充空值
         merged_df['通话次数'] = merged_df['通话次数'].fillna(0)
-        merged_df['通话时长'] = merged_df['通话时长'].fillna(0)
+        if '通话总时长(分钟)' in merged_df.columns:
+            merged_df['通话总时长(分钟)'] = merged_df['通话总时长(分钟)'].fillna(0)
+        elif '通话时长' in merged_df.columns:
+            merged_df['通话时长'] = merged_df['通话时长'].fillna(0)
 
         # 填充各平台的金额字段
         for col in merged_df.columns:
@@ -1227,7 +1390,9 @@ class ExcelExporter(BaseExporter):
         call_columns = []
         if '通话次数' in merged_df.columns:
             call_columns.append('通话次数')
-        if '通话时长' in merged_df.columns:
+        if '通话总时长(分钟)' in merged_df.columns:
+            call_columns.append('通话总时长(分钟)')
+        elif '通话时长' in merged_df.columns:
             call_columns.append('通话时长')
 
         # 各平台独立列（按平台名称排序）

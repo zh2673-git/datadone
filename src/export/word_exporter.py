@@ -594,7 +594,18 @@ class WordExporter:
         
         start_date = person_data[person_data.columns[person_data.columns.str.contains('日期')][0]].min()
         end_date = person_data[person_data.columns[person_data.columns.str.contains('日期')][0]].max()
-        time_span_str = f"{start_date.strftime('%Y-%m-%d')}至{end_date.strftime('%Y-%m-%d')}"
+        # 检查是否为NaT值，如果是则使用默认字符串
+        if pd.isna(start_date):
+            start_date_str = "未知开始日期"
+        else:
+            start_date_str = start_date.strftime('%Y-%m-%d')
+        
+        if pd.isna(end_date):
+            end_date_str = "未知结束日期"
+        else:
+            end_date_str = end_date.strftime('%Y-%m-%d')
+        
+        time_span_str = f"{start_date_str}至{end_date_str}"
         
         main_outgoing = person_data.get('主叫次数', pd.Series(0)).sum()
         main_incoming = person_data.get('被叫次数', pd.Series(0)).sum()
@@ -613,7 +624,18 @@ class WordExporter:
 
         start_date = person_data[data_model.date_column].min()
         end_date = person_data[data_model.date_column].max()
-        time_span_str = f"{start_date.strftime('%Y-%m-%d')}至{end_date.strftime('%Y-%m-%d')}"
+        # 检查是否为NaT值，如果是则使用默认字符串
+        if pd.isna(start_date):
+            start_date_str = "未知开始日期"
+        else:
+            start_date_str = start_date.strftime('%Y-%m-%d')
+        
+        if pd.isna(end_date):
+            end_date_str = "未知结束日期"
+        else:
+            end_date_str = end_date.strftime('%Y-%m-%d')
+        
+        time_span_str = f"{start_date_str}至{end_date_str}"
 
         # 计算主要时间集中
         person_data = person_data.copy()

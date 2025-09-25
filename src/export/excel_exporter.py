@@ -724,9 +724,9 @@ class ExcelExporter(BaseExporter):
         # 以话单数据为基础进行合并
         merged_df = call_details.copy()
 
-        # 与账单数据合并 - 支持跨人员匹配
+        # 与账单数据合并 - 严格匹配，禁止跨人员关联
         if not bill_summary_with_details.empty:
-            # 首先尝试完全匹配
+            # 只进行完全匹配（本方姓名+对方姓名），禁止跨人员匹配
             merged_df = pd.merge(
                 merged_df,
                 bill_summary_with_details,
@@ -734,74 +734,15 @@ class ExcelExporter(BaseExporter):
                 how='left'
             )
 
-            # 对于没有匹配到的记录，尝试基于对方姓名匹配
-            # 创建账单数据的对方姓名汇总
-            bill_contact_summary = bill_summary_with_details.groupby('对方姓名').agg({
-                '收入总额': 'sum',
-                '支出总额': 'sum',
-                '交易次数': 'sum',
-                '平台': lambda x: '、'.join(x.unique()),
-                '平台金额分布': lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-            }).reset_index()
-
-            # 找出没有账单数据的话单记录
-            no_bill_mask = merged_df['收入总额'].isna()
-            if no_bill_mask.any():
-                # 基于对方姓名进行跨人员匹配
-                cross_match = pd.merge(
-                    merged_df[no_bill_mask][['本方姓名', '对方姓名']],
-                    bill_contact_summary,
-                    on='对方姓名',
-                    how='left'
-                )
-
-                # 更新没有匹配到的记录
-                for idx, row in cross_match.iterrows():
-                    if pd.notna(row['收入总额']):
-                        mask = (merged_df['本方姓名'] == row['本方姓名']) & (merged_df['对方姓名'] == row['对方姓名'])
-                        merged_df.loc[mask, '收入总额'] = row['收入总额']
-                        merged_df.loc[mask, '支出总额'] = row['支出总额']
-                        merged_df.loc[mask, '交易次数'] = row['交易次数']
-                        merged_df.loc[mask, '平台'] = row['平台']
-                        merged_df.loc[mask, '平台金额分布'] = row['平台金额分布']
-
-        # 与各平台独立数据合并 - 支持跨人员匹配
+        # 与各平台独立数据合并 - 严格匹配，禁止跨人员关联
         for platform, platform_data in platform_individual_data.items():
-            # 首先尝试完全匹配
+            # 只进行完全匹配（本方姓名+对方姓名），禁止跨人员匹配
             merged_df = pd.merge(
                 merged_df,
                 platform_data,
                 on=['本方姓名', '对方姓名'],
                 how='left'
             )
-
-            # 对于没有匹配到的记录，尝试基于对方姓名匹配
-            platform_contact_summary = platform_data.groupby('对方姓名').agg({
-                f'{platform}_收入总额': 'sum',
-                f'{platform}_支出总额': 'sum',
-                f'{platform}_交易次数': 'sum'
-            }).reset_index()
-
-            # 找出没有该平台数据的话单记录
-            platform_col = f'{platform}_收入总额'
-            if platform_col in merged_df.columns:
-                no_platform_mask = merged_df[platform_col].isna()
-                if no_platform_mask.any():
-                    # 基于对方姓名进行跨人员匹配
-                    cross_match = pd.merge(
-                        merged_df[no_platform_mask][['本方姓名', '对方姓名']],
-                        platform_contact_summary,
-                        on='对方姓名',
-                        how='left'
-                    )
-
-                    # 更新没有匹配到的记录
-                    for idx, row in cross_match.iterrows():
-                        if pd.notna(row[f'{platform}_收入总额']):
-                            mask = (merged_df['本方姓名'] == row['本方姓名']) & (merged_df['对方姓名'] == row['对方姓名'])
-                            merged_df.loc[mask, f'{platform}_收入总额'] = row[f'{platform}_收入总额']
-                            merged_df.loc[mask, f'{platform}_支出总额'] = row[f'{platform}_支出总额']
-                            merged_df.loc[mask, f'{platform}_交易次数'] = row[f'{platform}_交易次数']
 
         # 填充空值
         merged_df['收入总额'] = merged_df['收入总额'].fillna(0)
@@ -1902,4 +1843,4 @@ class ExcelExporter(BaseExporter):
     
     # Obsolete functions removed.
     # The methods get_output_path, export_all_to_excel, export_raw_data,
-    # export_cash_operations, and export_bank_transactions were here. 
+    # export_cash_operations, and export_bank_transactions were here.

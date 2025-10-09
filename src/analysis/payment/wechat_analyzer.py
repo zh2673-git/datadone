@@ -7,8 +7,8 @@ from typing import List, Dict, Union, Optional
 from datetime import datetime
 
 from src.analysis.payment import PaymentAnalyzer
-from src.datasource.payment.wechat_model import WeChatDataModel
-from src.group import GroupManager
+from ...model.wechat_model import WeChatDataModel
+from src.utils.group import GroupManager
 
 class WeChatAnalyzer(PaymentAnalyzer):
     """
@@ -112,4 +112,4 @@ class WeChatAnalyzer(PaymentAnalyzer):
             
             results[f"{source}_微信账号互动"] = account_stats.sort_values('互动总次数', ascending=False)
         
-        return results 
+        return results

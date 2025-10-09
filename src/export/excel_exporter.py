@@ -10,11 +10,13 @@ from datetime import datetime
 import numpy as np
 
 from src.export.base_exporter import BaseExporter
-from src.base import BaseDataModel
-from src.datasource import BankDataModel
+from ..model.base_model import BaseDataModel
+from ..model.bank_model import BankDataModel
 from src.utils.config import Config
 from src.utils.constants import FilePath
 from src.utils.exceptions import ExportError
+from src.utils.export.excel_export import ExcelSummaryGenerator, ExcelFormatter, ExcelCrossAnalyzer, ExcelDataExtractor
+from src.utils.analysis.format_helpers import standardize_frequency_table, standardize_call_frequency_table
 
 class ExcelExporter(BaseExporter):
     """
@@ -34,6 +36,12 @@ class ExcelExporter(BaseExporter):
         super().__init__(output_dir)
         self.config = config or Config()
         self.excel_config = self.config.get_section('export.excel')
+        
+        # 初始化工具类实例
+        self.summary_generator = ExcelSummaryGenerator()
+        self.formatter = ExcelFormatter()
+        self.cross_analyzer = ExcelCrossAnalyzer()
+        self.data_extractor = ExcelDataExtractor()
         
     def export(self, analysis_results: Dict[str, pd.DataFrame], filename: str, 
               data_models: Optional[Dict[str, BaseDataModel]] = None, **kwargs) -> str:
@@ -108,7 +116,7 @@ class ExcelExporter(BaseExporter):
                             df_copy['平台'] = platform
                             df_copy['数据来源'] = result_name.split('_')[0] if '_' in result_name else '未知'
                             # 话单类频率表单独处理
-                            df_copy = self._standardize_call_frequency_table(df_copy)
+                            df_copy = standardize_call_frequency_table(df_copy)
                         else:
                             # 账单类频率表
                             if 'Wechat' in result_name or '微信' in result_name:
@@ -121,7 +129,7 @@ class ExcelExporter(BaseExporter):
                             df_copy['平台'] = platform
                             df_copy['数据来源'] = result_name.split('_')[0] if '_' in result_name else '未知'
                             # 统一频率表的字段结构并添加占比字段
-                            df_copy = self._standardize_frequency_table(df_copy)
+                            df_copy = standardize_frequency_table(df_copy, platform)
 
                         frequency_analysis_dfs.append(df_copy)
                         continue
@@ -133,7 +141,11 @@ class ExcelExporter(BaseExporter):
 
                     # 其他分析结果
                     if include_unit_info and '对方姓名' in df.columns:
-                        df = self._add_company_info(df, company_position_map)
+                        # 使用utils模块的data_extractor处理单位信息
+                        if data_models and 'call' in data_models and data_models['call']:
+                            call_data = data_models['call'].data
+                            company_info_df = self.data_extractor.extract_company_info(call_data)
+                            df = self.data_extractor.add_company_info_to_dataframe(df, company_info_df)
                     other_results[result_name] = df
 
                 # 按照指定顺序生成Excel表：分析汇总、频率（账单类、话单类分开）、综合分析、银行分析原始、微信分析原始、支付宝分析原始、高级分析
@@ -159,8 +171,8 @@ class ExcelExporter(BaseExporter):
 
                         combined_bill_df.to_excel(writer, sheet_name='账单类频率表', index=False)
                         worksheet = writer.sheets['账单类频率表']
-                        self._set_column_widths(worksheet, combined_bill_df)
-                        self._format_sheet(worksheet, combined_bill_df, writer.book)
+                        self.formatter.set_column_widths(worksheet, combined_bill_df)
+                        self.formatter.format_sheet(worksheet, combined_bill_df, writer.book)
 
                     # 生成话单类频率表
                     if call_frequency_dfs:
@@ -186,8 +198,8 @@ class ExcelExporter(BaseExporter):
 
                         combined_call_df.to_excel(writer, sheet_name='话单类频率表', index=False)
                         worksheet = writer.sheets['话单类频率表']
-                        self._set_column_widths(worksheet, combined_call_df)
-                        self._format_sheet(worksheet, combined_call_df, writer.book)
+                        self.formatter.set_column_widths(worksheet, combined_call_df)
+                        self.formatter.format_sheet(worksheet, combined_call_df, writer.book)
 
                     # 3. 综合分析表（交叉分析）
                     if call_frequency_dfs or bill_frequency_dfs:
@@ -208,8 +220,8 @@ class ExcelExporter(BaseExporter):
 
                     combined_advanced_df.to_excel(writer, sheet_name='高级分析', index=False)
                     worksheet = writer.sheets['高级分析']
-                    self._set_column_widths(worksheet, combined_advanced_df)
-                    self._format_sheet(worksheet, combined_advanced_df, writer.book)
+                    self.formatter.set_column_widths(worksheet, combined_advanced_df)
+                    self.formatter.format_sheet(worksheet, combined_advanced_df, writer.book)
 
                 # 注意：按照用户要求，高级分析之后的所有表格都不再生成
                 # 包括：其他分析结果、重点收支数据表等
@@ -373,8 +385,8 @@ class ExcelExporter(BaseExporter):
             # 导出合并后的分析汇总表
             combined_summary.to_excel(writer, sheet_name='分析汇总表', index=False)
             worksheet = writer.sheets['分析汇总表']
-            self._set_column_widths(worksheet, combined_summary)
-            self._format_sheet(worksheet, combined_summary, writer.book)
+            self.formatter.set_column_widths(worksheet, combined_summary)
+            self.formatter.format_sheet(worksheet, combined_summary, writer.book)
 
         self.logger.info("已添加分析汇总表")
 
@@ -389,35 +401,15 @@ class ExcelExporter(BaseExporter):
         data_models : Dict
             包含各种数据模型的字典
         """
-        all_summary_data = []
+        # 使用utils模块生成综合分析汇总数据
+        combined_summary = self.summary_generator.generate_comprehensive_summary(data_models)
 
-        # 处理银行数据
-        if data_models and 'bank' in data_models and data_models['bank']:
-            bank_summary = self._get_bank_summary_data(data_models['bank'])
-            if not bank_summary.empty:
-                all_summary_data.append(bank_summary)
-
-        # 处理微信数据
-        if data_models and 'wechat' in data_models and data_models['wechat']:
-            wechat_summary = self._get_payment_summary_data(data_models['wechat'], '微信')
-            if not wechat_summary.empty:
-                all_summary_data.append(wechat_summary)
-
-        # 处理支付宝数据
-        if data_models and 'alipay' in data_models and data_models['alipay']:
-            alipay_summary = self._get_payment_summary_data(data_models['alipay'], '支付宝')
-            if not alipay_summary.empty:
-                all_summary_data.append(alipay_summary)
-
-        # 合并所有汇总数据
-        if all_summary_data:
-            combined_summary = pd.concat(all_summary_data, ignore_index=True)
-
+        if not combined_summary.empty:
             # 导出合并后的分析汇总表
             combined_summary.to_excel(writer, sheet_name='分析汇总表', index=False)
             worksheet = writer.sheets['分析汇总表']
-            self._set_column_widths(worksheet, combined_summary)
-            self._format_sheet(worksheet, combined_summary, writer.book)
+            self.formatter.set_column_widths(worksheet, combined_summary)
+            self.formatter.format_sheet(worksheet, combined_summary, writer.book)
 
             self.logger.info("已添加综合分析汇总表")
 
@@ -611,14 +603,14 @@ class ExcelExporter(BaseExporter):
 
         # 1. 以话单为基准的交叉分析（如果有话单和账单数据）
         if not combined_call_df.empty and not combined_bill_df.empty:
-            call_based_analysis = self._cross_analyze_with_call_base(combined_call_df, combined_bill_df)
+            call_based_analysis = self.cross_analyzer.cross_analyze_with_call_base(combined_call_df, combined_bill_df)
             if not call_based_analysis.empty:
                 call_based_analysis['分析基准'] = '以话单为基准'
                 comprehensive_results.append(call_based_analysis)
 
         # 2. 以账单类为基准的交叉分析（如果有话单和账单数据）
         if not combined_bill_df.empty and not combined_call_df.empty:
-            bill_based_analysis = self._cross_analyze_with_bill_base(combined_bill_df, combined_call_df)
+            bill_based_analysis = self.cross_analyzer.cross_analyze_with_bill_base(combined_bill_df, combined_call_df)
             if not bill_based_analysis.empty:
                 bill_based_analysis['分析基准'] = '以账单类为基准'
                 comprehensive_results.append(bill_based_analysis)
@@ -638,189 +630,12 @@ class ExcelExporter(BaseExporter):
 
             final_comprehensive_df.to_excel(writer, sheet_name='综合分析', index=False)
             worksheet = writer.sheets['综合分析']
-            self._set_column_widths(worksheet, final_comprehensive_df)
-            self._format_sheet(worksheet, final_comprehensive_df, writer.book)
+            self.formatter.set_column_widths(worksheet, final_comprehensive_df)
+            self.formatter.format_sheet(worksheet, final_comprehensive_df, writer.book)
 
             self.logger.info("已生成综合分析表")
 
-    def _cross_analyze_with_call_base(self, call_df: pd.DataFrame, bill_df: pd.DataFrame) -> pd.DataFrame:
-        """以话单为基准进行交叉分析，支持跨数据源对手信息显示"""
-        # 以话单数据为基础，不创建额外组合
 
-        # 基于对方姓名进行匹配，并计算各平台的金额分布
-        bill_platform_summary = bill_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
-            '收入总额': 'sum',
-            '支出总额': 'sum',
-            '交易次数': 'sum'
-        }).reset_index()
-
-        # 计算总金额
-        bill_total_summary = bill_df.groupby(['本方姓名', '对方姓名']).agg({
-            '收入总额': 'sum',
-            '支出总额': 'sum',
-            '交易次数': 'sum',
-            '平台': lambda x: '、'.join(x.unique())
-        }).reset_index()
-
-        # 计算各平台的金额分布
-        platform_details = bill_platform_summary.groupby(['本方姓名', '对方姓名']).apply(
-            lambda group: self._format_platform_details(group)
-        ).reset_index(name='平台金额分布')
-
-        # 为每个平台创建独立字段
-        platform_individual_data = {}
-        if not bill_platform_summary.empty:
-            platforms = bill_platform_summary['平台'].unique()
-            for platform in platforms:
-                platform_data = bill_platform_summary[bill_platform_summary['平台'] == platform]
-                platform_summary = platform_data.groupby(['本方姓名', '对方姓名']).agg({
-                    '收入总额': 'sum',
-                    '支出总额': 'sum',
-                    '交易次数': 'sum'
-                }).reset_index()
-
-                # 重命名列以区分不同平台
-                platform_summary = platform_summary.rename(columns={
-                    '收入总额': f'{platform}_收入总额',
-                    '支出总额': f'{platform}_支出总额',
-                    '交易次数': f'{platform}_交易次数'
-                })
-
-                platform_individual_data[platform] = platform_summary
-
-        # 合并总金额和平台详情
-        if not bill_total_summary.empty and not platform_details.empty:
-            bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
-        else:
-            bill_summary_with_details = bill_total_summary.copy() if not bill_total_summary.empty else pd.DataFrame()
-
-        # 获取话单中的对方详细信息
-        agg_dict = {
-            '通话次数': 'sum',
-            '数据来源': 'first'
-        }
-
-        # 检查通话时长列名
-        if '通话总时长(分钟)' in call_df.columns:
-            agg_dict['通话总时长(分钟)'] = 'sum'
-        elif '通话时长' in call_df.columns:
-            agg_dict['通话时长'] = 'sum'
-
-        # 安全地添加可选字段
-        if '对方号码' in call_df.columns:
-            agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        # 检查带lambda后缀的字段名（来自话单频率分析）
-        if '对方单位名称_<lambda>' in call_df.columns:
-            agg_dict['对方单位名称_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        elif '对方单位名称' in call_df.columns:
-            agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        if '对方职务_<lambda>' in call_df.columns:
-            agg_dict['对方职务_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        elif '对方职务' in call_df.columns:
-            agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-
-        call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
-
-        # 以话单数据为基础进行合并
-        merged_df = call_details.copy()
-
-        # 与账单数据合并 - 严格匹配，禁止跨人员关联
-        if not bill_summary_with_details.empty:
-            # 只进行完全匹配（本方姓名+对方姓名），禁止跨人员匹配
-            merged_df = pd.merge(
-                merged_df,
-                bill_summary_with_details,
-                on=['本方姓名', '对方姓名'],
-                how='left'
-            )
-
-        # 与各平台独立数据合并 - 严格匹配，禁止跨人员关联
-        for platform, platform_data in platform_individual_data.items():
-            # 只进行完全匹配（本方姓名+对方姓名），禁止跨人员匹配
-            merged_df = pd.merge(
-                merged_df,
-                platform_data,
-                on=['本方姓名', '对方姓名'],
-                how='left'
-            )
-
-        # 填充空值
-        merged_df['收入总额'] = merged_df['收入总额'].fillna(0)
-        merged_df['支出总额'] = merged_df['支出总额'].fillna(0)
-        merged_df['交易次数'] = merged_df['交易次数'].fillna(0)
-        merged_df['平台'] = merged_df['平台'].fillna('无')
-        merged_df['平台金额分布'] = merged_df['平台金额分布'].fillna('无')
-
-        # 填充各平台的金额字段
-        for col in merged_df.columns:
-            if any(platform in col for platform in ['银行', '微信', '支付宝']) and any(field in col for field in ['收入总额', '支出总额', '交易次数']):
-                merged_df[col] = merged_df[col].fillna(0)
-
-        # 安全地填充可选字段的空值
-        if '对方号码' in merged_df.columns:
-            merged_df['对方号码'] = merged_df['对方号码'].fillna('')
-        if '对方单位名称_<lambda>' in merged_df.columns:
-            merged_df['对方单位名称_<lambda>'] = merged_df['对方单位名称_<lambda>'].fillna('')
-        elif '对方单位名称' in merged_df.columns:
-            merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
-        if '对方职务_<lambda>' in merged_df.columns:
-            merged_df['对方职务_<lambda>'] = merged_df['对方职务_<lambda>'].fillna('')
-        elif '对方职务' in merged_df.columns:
-            merged_df['对方职务'] = merged_df['对方职务'].fillna('')
-
-        # 重新排列列的顺序，将对方详细信息放在对方姓名后面
-        base_columns = ['本方姓名', '对方姓名']
-        detail_columns = []
-
-        # 安全地添加存在的详细信息字段，优先使用带lambda后缀的字段
-        if '对方号码' in merged_df.columns:
-            detail_columns.append('对方号码')
-        if '对方单位名称_<lambda>' in merged_df.columns:
-            detail_columns.append('对方单位名称_<lambda>')
-        elif '对方单位名称' in merged_df.columns:
-            detail_columns.append('对方单位名称')
-        if '对方职务_<lambda>' in merged_df.columns:
-            detail_columns.append('对方职务_<lambda>')
-        elif '对方职务' in merged_df.columns:
-            detail_columns.append('对方职务')
-
-        # 话单相关列
-        call_columns = []
-        if '通话次数' in merged_df.columns:
-            call_columns.append('通话次数')
-        if '通话总时长(分钟)' in merged_df.columns:
-            call_columns.append('通话总时长(分钟)')
-        elif '通话时长' in merged_df.columns:
-            call_columns.append('通话时长')
-        if '数据来源' in merged_df.columns:
-            call_columns.append('数据来源')
-
-        # 账单汇总列
-        bill_summary_columns = []
-        if '收入总额' in merged_df.columns:
-            bill_summary_columns.extend(['收入总额', '支出总额', '交易次数'])
-        if '平台' in merged_df.columns:
-            bill_summary_columns.append('平台')
-        if '平台金额分布' in merged_df.columns:
-            bill_summary_columns.append('平台金额分布')
-
-        # 各平台独立列（按平台名称排序）
-        platform_columns = []
-        platforms = ['银行', '微信', '支付宝']
-        for platform in platforms:
-            for field in ['收入总额', '支出总额', '交易次数']:
-                col_name = f'{platform}_{field}'
-                if col_name in merged_df.columns:
-                    platform_columns.append(col_name)
-
-        # 剩余列
-        used_columns = base_columns + detail_columns + call_columns + bill_summary_columns + platform_columns
-        remaining_columns = [col for col in merged_df.columns if col not in used_columns]
-
-        final_columns = base_columns + detail_columns + call_columns + bill_summary_columns + platform_columns + remaining_columns
-        merged_df = merged_df[[col for col in final_columns if col in merged_df.columns]]
-
-        return merged_df
 
     def _generate_platform_based_analysis(self, combined_bill_df: pd.DataFrame, combined_call_df: pd.DataFrame) -> list:
         """
@@ -845,481 +660,36 @@ class ExcelExporter(BaseExporter):
 
         # 为每个账单平台生成以该平台为基准的交叉分析
         for base_platform in bill_platforms:
-            base_platform_df = combined_bill_df[combined_bill_df['平台'] == base_platform]
-
-            # 获取其他数据源（其他账单平台 + 话单）
-            other_bill_platforms_df = combined_bill_df[combined_bill_df['平台'] != base_platform]
-
-            # 检查是否有其他数据源可以进行交叉分析
-            has_other_bill_data = not other_bill_platforms_df.empty
-            has_call_data = not combined_call_df.empty
-
-            if has_other_bill_data or has_call_data:
-                cross_analysis = self._cross_analyze_with_platform_base(
-                    base_platform_df, other_bill_platforms_df, combined_call_df, base_platform
-                )
-                if not cross_analysis.empty:
-                    cross_analysis['分析基准'] = f'以{base_platform}为基准'
-                    results.append(cross_analysis)
+            # 使用utils模块的cross_analyze_with_platform_base方法
+            cross_analysis = self.cross_analyzer.cross_analyze_with_platform_base(
+                combined_bill_df, combined_call_df, base_platform
+            )
+            if not cross_analysis.empty:
+                cross_analysis['分析基准'] = f'以{base_platform}为基准'
+                results.append(cross_analysis)
 
         return results
-
-    def _cross_analyze_with_platform_base(self, base_platform_df: pd.DataFrame, other_bill_platforms_df: pd.DataFrame,
-                                          call_df: pd.DataFrame, base_platform: str) -> pd.DataFrame:
-        """
-        以特定平台为基准进行交叉分析（与其他账单平台和话单数据）
-
-        Parameters:
-        -----------
-        base_platform_df : pd.DataFrame
-            基准平台的数据
-        other_bill_platforms_df : pd.DataFrame
-            其他账单平台的数据
-        call_df : pd.DataFrame
-            话单数据
-        base_platform : str
-            基准平台名称
-
-        Returns:
-        --------
-        pd.DataFrame
-            交叉分析结果
-        """
-        # 获取基准平台的详细信息
-        agg_dict = {
-            '收入总额': 'sum',
-            '支出总额': 'sum',
-            '交易次数': 'sum'
-        }
-
-        # 安全地添加数据来源字段
-        if '数据来源' in base_platform_df.columns:
-            agg_dict['数据来源'] = 'first'
-
-        base_details = base_platform_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
-
-        # 重命名基准平台的列以区分
-        base_details = base_details.rename(columns={
-            '收入总额': f'{base_platform}_收入总额',
-            '支出总额': f'{base_platform}_支出总额',
-            '交易次数': f'{base_platform}_交易次数'
-        })
-
-        # 处理其他账单平台数据，为每个平台创建独立字段
-        other_platforms_data = {}
-        platform_details_list = []
-
-        if not other_bill_platforms_df.empty:
-            # 获取所有其他平台
-            other_platforms = other_bill_platforms_df['平台'].unique()
-
-            # 为每个其他平台创建独立的汇总数据
-            for platform in other_platforms:
-                platform_data = other_bill_platforms_df[other_bill_platforms_df['平台'] == platform]
-                platform_summary = platform_data.groupby(['本方姓名', '对方姓名']).agg({
-                    '收入总额': 'sum',
-                    '支出总额': 'sum',
-                    '交易次数': 'sum'
-                }).reset_index()
-
-                # 重命名列以区分不同平台
-                platform_summary = platform_summary.rename(columns={
-                    '收入总额': f'{platform}_收入总额',
-                    '支出总额': f'{platform}_支出总额',
-                    '交易次数': f'{platform}_交易次数'
-                })
-
-                other_platforms_data[platform] = platform_summary
-
-            # 计算其他平台汇总信息（用于"平台"字段）
-            other_bill_total_summary = other_bill_platforms_df.groupby(['本方姓名', '对方姓名']).agg({
-                '平台': lambda x: '、'.join(x.unique())
-            }).reset_index()
-
-            # 计算平台金额分布详情
-            other_bill_platform_summary = other_bill_platforms_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
-                '收入总额': 'sum',
-                '支出总额': 'sum',
-                '交易次数': 'sum'
-            }).reset_index()
-
-            platform_details = other_bill_platform_summary.groupby(['本方姓名', '对方姓名']).apply(
-                lambda group: self._format_platform_details(group)
-            ).reset_index(name='其他账单平台金额分布')
-
-            # 合并平台信息和平台详情
-            other_platform_info = pd.merge(other_bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
-            platform_details_list.append(other_platform_info)
-
-        # 处理话单数据
-        call_summary = pd.DataFrame()
-        if not call_df.empty:
-            # 获取话单中的对方详细信息
-            agg_dict = {
-                '通话次数': 'sum'
-            }
-
-            # 检查通话时长列名
-            if '通话总时长(分钟)' in call_df.columns:
-                agg_dict['通话总时长(分钟)'] = 'sum'
-            elif '通话时长' in call_df.columns:
-                agg_dict['通话时长'] = 'sum'
-
-            # 安全地添加可选字段
-            if '对方号码' in call_df.columns:
-                agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-            # 检查带lambda后缀的字段名（来自话单频率分析）
-            if '对方单位名称_<lambda>' in call_df.columns:
-                agg_dict['对方单位名称_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-            elif '对方单位名称' in call_df.columns:
-                agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-            if '对方职务_<lambda>' in call_df.columns:
-                agg_dict['对方职务_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-            elif '对方职务' in call_df.columns:
-                agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-
-            call_summary = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
-
-        # 开始合并数据
-        merged_df = base_details.copy()
-
-        # 与每个其他账单平台数据合并
-        for platform, platform_data in other_platforms_data.items():
-            merged_df = pd.merge(
-                merged_df,
-                platform_data,
-                on=['本方姓名', '对方姓名'],
-                how='left'
-            )
-
-        # 合并平台金额分布详情
-        if platform_details_list:
-            for platform_details in platform_details_list:
-                merged_df = pd.merge(
-                    merged_df,
-                    platform_details,
-                    on=['本方姓名', '对方姓名'],
-                    how='left'
-                )
-
-        # 与话单数据合并
-        if not call_summary.empty:
-            merged_df = pd.merge(
-                merged_df,
-                call_summary,
-                on=['本方姓名', '对方姓名'],
-                how='left'
-            )
-
-        # 填充空值
-        # 填充各平台的金额字段
-        for col in merged_df.columns:
-            if any(platform in col for platform in ['银行', '微信', '支付宝']) and any(field in col for field in ['收入总额', '支出总额', '交易次数']):
-                merged_df[col] = merged_df[col].fillna(0)
-
-        # 填充其他字段
-        if '平台' in merged_df.columns:
-            merged_df['平台'] = merged_df['平台'].fillna('无')
-        if '平台金额分布' in merged_df.columns:
-            merged_df['平台金额分布'] = merged_df['平台金额分布'].fillna('无')
-        if '其他账单平台金额分布' in merged_df.columns:
-            merged_df['其他账单平台金额分布'] = merged_df['其他账单平台金额分布'].fillna('无')
-        if '通话次数' in merged_df.columns:
-            merged_df['通话次数'] = merged_df['通话次数'].fillna(0)
-        if '通话总时长(分钟)' in merged_df.columns:
-            merged_df['通话总时长(分钟)'] = merged_df['通话总时长(分钟)'].fillna(0)
-        elif '通话时长' in merged_df.columns:
-            merged_df['通话时长'] = merged_df['通话时长'].fillna(0)
-        if '数据来源' in merged_df.columns:
-            merged_df['数据来源'] = merged_df['数据来源'].fillna('未知')
-
-        # 安全地填充可选字段的空值
-        if '对方号码' in merged_df.columns:
-            merged_df['对方号码'] = merged_df['对方号码'].fillna('')
-        if '对方单位名称_<lambda>' in merged_df.columns:
-            merged_df['对方单位名称_<lambda>'] = merged_df['对方单位名称_<lambda>'].fillna('')
-        elif '对方单位名称' in merged_df.columns:
-            merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
-        if '对方职务_<lambda>' in merged_df.columns:
-            merged_df['对方职务_<lambda>'] = merged_df['对方职务_<lambda>'].fillna('')
-        elif '对方职务' in merged_df.columns:
-            merged_df['对方职务'] = merged_df['对方职务'].fillna('')
-
-        # 重新排列列的顺序
-        base_columns = ['本方姓名', '对方姓名']
-
-        # 添加对方详细信息字段，优先使用带lambda后缀的字段
-        detail_columns = []
-        if '对方号码' in merged_df.columns:
-            detail_columns.append('对方号码')
-        if '对方单位名称_<lambda>' in merged_df.columns:
-            detail_columns.append('对方单位名称_<lambda>')
-        elif '对方单位名称' in merged_df.columns:
-            detail_columns.append('对方单位名称')
-        if '对方职务_<lambda>' in merged_df.columns:
-            detail_columns.append('对方职务_<lambda>')
-        elif '对方职务' in merged_df.columns:
-            detail_columns.append('对方职务')
-
-        # 基准平台列
-        base_platform_columns = []
-        for col in [f'{base_platform}_收入总额', f'{base_platform}_支出总额', f'{base_platform}_交易次数']:
-            if col in merged_df.columns:
-                base_platform_columns.append(col)
-
-        # 其他平台列（按平台名称排序）
-        other_platform_columns = []
-        platforms = ['银行', '微信', '支付宝']
-        for platform in platforms:
-            if platform != base_platform:  # 排除基准平台
-                for field in ['收入总额', '支出总额', '交易次数']:
-                    col_name = f'{platform}_{field}'
-                    if col_name in merged_df.columns:
-                        other_platform_columns.append(col_name)
-
-        # 话单相关列
-        call_columns = []
-        if '通话次数' in merged_df.columns:
-            call_columns.append('通话次数')
-        if '通话总时长(分钟)' in merged_df.columns:
-            call_columns.append('通话总时长(分钟)')
-        elif '通话时长' in merged_df.columns:
-            call_columns.append('通话时长')
-
-        # 其他信息列
-        info_columns = []
-        if '平台' in merged_df.columns:
-            info_columns.append('平台')
-        if '平台金额分布' in merged_df.columns:
-            info_columns.append('平台金额分布')
-        if '其他账单平台金额分布' in merged_df.columns:
-            info_columns.append('其他账单平台金额分布')
-        if '数据来源' in merged_df.columns:
-            info_columns.append('数据来源')
-
-        # 剩余列
-        used_columns = base_columns + detail_columns + base_platform_columns + other_platform_columns + call_columns + info_columns
-        remaining_columns = [col for col in merged_df.columns if col not in used_columns]
-
-        final_columns = base_columns + detail_columns + base_platform_columns + other_platform_columns + call_columns + info_columns + remaining_columns
-        merged_df = merged_df[[col for col in final_columns if col in merged_df.columns]]
-
-        return merged_df
-
-
 
     def _format_platform_details(self, group: pd.DataFrame) -> str:
         """格式化平台金额分布详情"""
         details = []
         for _, row in group.iterrows():
             platform = row['平台']
-            income = row['收入总额']
-            expense = row['支出总额']
+            
+            # 安全地获取收入总额和支出总额
+            income = 0
+            expense = 0
+            if '收入总额' in group.columns:
+                income = row['收入总额']
+            if '支出总额' in group.columns:
+                expense = row['支出总额']
+                
             if income > 0 or expense > 0:
                 detail = f"{platform}(收入{income:.0f}元,支出{expense:.0f}元)"
                 details.append(detail)
         return '; '.join(details) if details else '无'
 
-    def _cross_analyze_with_bill_base(self, bill_df: pd.DataFrame, call_df: pd.DataFrame) -> pd.DataFrame:
-        """以账单类为基准进行交叉分析，支持跨数据源对手信息显示"""
-        # 以账单数据为基础，不创建额外组合
 
-        # 对账单类数据按对方姓名进行金额累计和去重，并计算平台分布
-        bill_platform_summary = bill_df.groupby(['本方姓名', '对方姓名', '平台']).agg({
-            '收入总额': 'sum',
-            '支出总额': 'sum',
-            '交易次数': 'sum'
-        }).reset_index()
-
-        # 计算总金额
-        bill_total_summary = bill_df.groupby(['本方姓名', '对方姓名']).agg({
-            '收入总额': 'sum',
-            '支出总额': 'sum',
-            '交易次数': 'sum',
-            '平台': lambda x: '、'.join(x.unique())
-        }).reset_index()
-
-        # 计算各平台的金额分布
-        platform_details = bill_platform_summary.groupby(['本方姓名', '对方姓名']).apply(
-            lambda group: self._format_platform_details(group)
-        ).reset_index(name='平台金额分布')
-
-        # 为每个平台创建独立字段
-        platform_individual_data = {}
-        if not bill_platform_summary.empty:
-            platforms = bill_platform_summary['平台'].unique()
-            for platform in platforms:
-                platform_data = bill_platform_summary[bill_platform_summary['平台'] == platform]
-                platform_summary = platform_data.groupby(['本方姓名', '对方姓名']).agg({
-                    '收入总额': 'sum',
-                    '支出总额': 'sum',
-                    '交易次数': 'sum'
-                }).reset_index()
-
-                # 重命名列以区分不同平台
-                platform_summary = platform_summary.rename(columns={
-                    '收入总额': f'{platform}_收入总额',
-                    '支出总额': f'{platform}_支出总额',
-                    '交易次数': f'{platform}_交易次数'
-                })
-
-                platform_individual_data[platform] = platform_summary
-
-        # 合并总金额和平台详情
-        if not bill_total_summary.empty and not platform_details.empty:
-            bill_summary_with_details = pd.merge(bill_total_summary, platform_details, on=['本方姓名', '对方姓名'])
-        else:
-            bill_summary_with_details = bill_total_summary.copy() if not bill_total_summary.empty else pd.DataFrame()
-
-        # 获取话单中的对方详细信息
-        agg_dict = {
-            '通话次数': 'sum'
-        }
-
-        # 检查通话时长列名
-        if '通话总时长(分钟)' in call_df.columns:
-            agg_dict['通话总时长(分钟)'] = 'sum'
-        elif '通话时长' in call_df.columns:
-            agg_dict['通话时长'] = 'sum'
-
-        # 安全地添加可选字段
-        if '对方号码' in call_df.columns:
-            agg_dict['对方号码'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        # 检查带lambda后缀的字段名（来自话单频率分析）
-        if '对方单位名称_<lambda>' in call_df.columns:
-            agg_dict['对方单位名称_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        elif '对方单位名称' in call_df.columns:
-            agg_dict['对方单位名称'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        if '对方职务_<lambda>' in call_df.columns:
-            agg_dict['对方职务_<lambda>'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-        elif '对方职务' in call_df.columns:
-            agg_dict['对方职务'] = lambda x: x.dropna().iloc[0] if len(x.dropna()) > 0 else ''
-
-        call_details = call_df.groupby(['本方姓名', '对方姓名']).agg(agg_dict).reset_index()
-
-        # 以账单数据为基础进行合并
-        if not bill_summary_with_details.empty:
-            merged_df = bill_summary_with_details.copy()
-        else:
-            merged_df = pd.DataFrame()
-
-        # 与话单数据合并 - 支持跨人员匹配
-        if not call_details.empty and not merged_df.empty:
-            # 首先尝试完全匹配
-            merged_df = pd.merge(
-                merged_df,
-                call_details,
-                on=['本方姓名', '对方姓名'],
-                how='left'
-            )
-
-            # 对于没有匹配到的记录，尝试基于对方姓名匹配
-            # 创建话单数据的对方姓名汇总
-            call_agg_dict = {
-                '通话次数': 'sum'
-            }
-            # 检查通话时长列名
-            if '通话总时长(分钟)' in call_details.columns:
-                call_agg_dict['通话总时长(分钟)'] = 'sum'
-            elif '通话时长' in call_details.columns:
-                call_agg_dict['通话时长'] = 'sum'
-
-            call_contact_summary = call_details.groupby('对方姓名').agg(call_agg_dict).reset_index()
-
-            # 添加单位信息字段
-            if '对方单位名称_<lambda>' in call_details.columns:
-                call_contact_summary = pd.merge(
-                    call_contact_summary,
-                    call_details.groupby('对方姓名')['对方单位名称_<lambda>'].first().reset_index(),
-                    on='对方姓名'
-                )
-            elif '对方单位名称' in call_details.columns:
-                call_contact_summary = pd.merge(
-                    call_contact_summary,
-                    call_details.groupby('对方姓名')['对方单位名称'].first().reset_index(),
-                    on='对方姓名'
-                )
-
-            # 找出没有话单数据的账单记录
-            no_call_mask = merged_df['通话次数'].isna()
-            if no_call_mask.any():
-                # 基于对方姓名进行跨人员匹配
-                cross_match = pd.merge(
-                    merged_df[no_call_mask][['本方姓名', '对方姓名']],
-                    call_contact_summary,
-                    on='对方姓名',
-                    how='left'
-                )
-
-                # 更新没有匹配到的记录
-                for idx, row in cross_match.iterrows():
-                    if pd.notna(row['通话次数']):
-                        mask = (merged_df['本方姓名'] == row['本方姓名']) & (merged_df['对方姓名'] == row['对方姓名'])
-                        merged_df.loc[mask, '通话次数'] = row['通话次数']
-
-                        # 更新通话时长（检查列名）
-                        if '通话总时长(分钟)' in row and pd.notna(row['通话总时长(分钟)']):
-                            merged_df.loc[mask, '通话总时长(分钟)'] = row['通话总时长(分钟)']
-                        elif '通话时长' in row and pd.notna(row['通话时长']):
-                            merged_df.loc[mask, '通话时长'] = row['通话时长']
-
-                        # 更新单位信息
-                        if '对方单位名称_<lambda>' in row and pd.notna(row['对方单位名称_<lambda>']):
-                            merged_df.loc[mask, '对方单位名称_<lambda>'] = row['对方单位名称_<lambda>']
-                        elif '对方单位名称' in row and pd.notna(row['对方单位名称']):
-                            merged_df.loc[mask, '对方单位名称'] = row['对方单位名称']
-
-        # 与各平台独立数据合并
-        for platform, platform_data in platform_individual_data.items():
-            merged_df = pd.merge(
-                merged_df,
-                platform_data,
-                on=['本方姓名', '对方姓名'],
-                how='left'
-            )
-
-        # 填充空值
-        merged_df['通话次数'] = merged_df['通话次数'].fillna(0)
-        if '通话总时长(分钟)' in merged_df.columns:
-            merged_df['通话总时长(分钟)'] = merged_df['通话总时长(分钟)'].fillna(0)
-        elif '通话时长' in merged_df.columns:
-            merged_df['通话时长'] = merged_df['通话时长'].fillna(0)
-
-        # 填充各平台的金额字段
-        for col in merged_df.columns:
-            if any(platform in col for platform in ['银行', '微信', '支付宝']) and any(field in col for field in ['收入总额', '支出总额', '交易次数']):
-                merged_df[col] = merged_df[col].fillna(0)
-
-        # 安全地填充可选字段的空值
-        if '对方号码' in merged_df.columns:
-            merged_df['对方号码'] = merged_df['对方号码'].fillna('')
-        if '对方单位名称_<lambda>' in merged_df.columns:
-            merged_df['对方单位名称_<lambda>'] = merged_df['对方单位名称_<lambda>'].fillna('')
-        elif '对方单位名称' in merged_df.columns:
-            merged_df['对方单位名称'] = merged_df['对方单位名称'].fillna('')
-        if '对方职务_<lambda>' in merged_df.columns:
-            merged_df['对方职务_<lambda>'] = merged_df['对方职务_<lambda>'].fillna('')
-        elif '对方职务' in merged_df.columns:
-            merged_df['对方职务'] = merged_df['对方职务'].fillna('')
-
-        # 重新排列列的顺序，将对方详细信息放在对方姓名后面
-        base_columns = ['本方姓名', '对方姓名']
-        detail_columns = []
-
-        # 安全地添加存在的详细信息字段，优先使用带lambda后缀的字段
-        if '对方号码' in merged_df.columns:
-            detail_columns.append('对方号码')
-        if '对方单位名称_<lambda>' in merged_df.columns:
-            detail_columns.append('对方单位名称_<lambda>')
-        elif '对方单位名称' in merged_df.columns:
-            detail_columns.append('对方单位名称')
-        if '对方职务_<lambda>' in merged_df.columns:
-            detail_columns.append('对方职务_<lambda>')
-        elif '对方职务' in merged_df.columns:
-            detail_columns.append('对方职务')
-
-        # 账单汇总列
-        bill_summary_columns = []
         if '收入总额' in merged_df.columns:
             bill_summary_columns.extend(['收入总额', '支出总额', '交易次数'])
         if '平台' in merged_df.columns:
@@ -1373,8 +743,8 @@ class ExcelExporter(BaseExporter):
             if not bank_raw_data.empty:
                 bank_raw_data.to_excel(writer, sheet_name='银行分析原始', index=False)
                 worksheet = writer.sheets['银行分析原始']
-                self._set_column_widths(worksheet, bank_raw_data)
-                self._format_sheet(worksheet, bank_raw_data, writer.book)
+                self.formatter.set_column_widths(worksheet, bank_raw_data)
+                self.formatter.format_sheet(worksheet, bank_raw_data, writer.book)
 
         # 处理微信原始数据
         if data_models and 'wechat' in data_models and data_models['wechat']:
@@ -1382,8 +752,8 @@ class ExcelExporter(BaseExporter):
             if not wechat_raw_data.empty:
                 wechat_raw_data.to_excel(writer, sheet_name='微信分析原始', index=False)
                 worksheet = writer.sheets['微信分析原始']
-                self._set_column_widths(worksheet, wechat_raw_data)
-                self._format_sheet(worksheet, wechat_raw_data, writer.book)
+                self.formatter.set_column_widths(worksheet, wechat_raw_data)
+                self.formatter.format_sheet(worksheet, wechat_raw_data, writer.book)
 
         # 处理支付宝原始数据
         if data_models and 'alipay' in data_models and data_models['alipay']:
@@ -1391,8 +761,8 @@ class ExcelExporter(BaseExporter):
             if not alipay_raw_data.empty:
                 alipay_raw_data.to_excel(writer, sheet_name='支付宝分析原始', index=False)
                 worksheet = writer.sheets['支付宝分析原始']
-                self._set_column_widths(worksheet, alipay_raw_data)
-                self._format_sheet(worksheet, alipay_raw_data, writer.book)
+                self.formatter.set_column_widths(worksheet, alipay_raw_data)
+                self.formatter.format_sheet(worksheet, alipay_raw_data, writer.book)
 
         self.logger.info("已生成平台原始数据表")
 
@@ -1525,7 +895,7 @@ class ExcelExporter(BaseExporter):
     def _get_key_transaction_data(self, data_model, transaction_type: str) -> pd.DataFrame:
         """获取重点交易数据"""
         try:
-            from src.utils.key_transactions import KeyTransactionEngine
+            from src.utils.model.key_transactions import KeyTransactionEngine
 
             # 获取配置对象
             config = getattr(data_model, 'config', None)
@@ -1595,20 +965,20 @@ class ExcelExporter(BaseExporter):
         if not transfer_data.empty:
             transfer_data.to_excel(writer, sheet_name='转账数据(原始)', index=False)
             worksheet = writer.sheets['转账数据(原始)']
-            self._set_column_widths(worksheet, transfer_data)
-            self._format_sheet(worksheet, transfer_data, writer.book)
+            self.formatter.set_column_widths(worksheet, transfer_data)
+            self.formatter.format_sheet(worksheet, transfer_data, writer.book)
 
         if not deposit_data.empty:
             deposit_data.to_excel(writer, sheet_name='存现数据(原始)', index=False)
             worksheet = writer.sheets['存现数据(原始)']
-            self._set_column_widths(worksheet, deposit_data)
-            self._format_sheet(worksheet, deposit_data, writer.book)
+            self.formatter.set_column_widths(worksheet, deposit_data)
+            self.formatter.format_sheet(worksheet, deposit_data, writer.book)
         
         if not withdrawal_data.empty:
             withdrawal_data.to_excel(writer, sheet_name='取现数据(原始)', index=False)
             worksheet = writer.sheets['取现数据(原始)']
-            self._set_column_widths(worksheet, withdrawal_data)
-            self._format_sheet(worksheet, withdrawal_data, writer.book)
+            self.formatter.set_column_widths(worksheet, withdrawal_data)
+            self.formatter.format_sheet(worksheet, withdrawal_data, writer.book)
 
         self.logger.info("已添加原始数据表")
 
@@ -1630,7 +1000,7 @@ class ExcelExporter(BaseExporter):
 
         try:
             # 导入重点收支识别引擎
-            from src.utils.key_transactions import KeyTransactionEngine
+            from src.utils.model.key_transactions import KeyTransactionEngine
 
             # 初始化重点收支识别引擎
             key_engine = KeyTransactionEngine(self.config)
@@ -1672,8 +1042,8 @@ class ExcelExporter(BaseExporter):
                 # 导出重点收支原始数据
                 key_transactions.to_excel(writer, sheet_name=raw_sheet_name, index=False)
                 worksheet = writer.sheets[raw_sheet_name]
-                self._set_column_widths(worksheet, key_transactions)
-                self._format_sheet(worksheet, key_transactions, writer.book)
+                self.formatter.set_column_widths(worksheet, key_transactions)
+                self.formatter.format_sheet(worksheet, key_transactions, writer.book)
 
                 # 生成重点收支统计数据
                 key_stats = key_engine.generate_statistics(
@@ -1688,8 +1058,8 @@ class ExcelExporter(BaseExporter):
                     # 导出重点收支统计数据
                     key_stats.to_excel(writer, sheet_name=stats_sheet_name, index=False)
                     worksheet = writer.sheets[stats_sheet_name]
-                    self._set_column_widths(worksheet, key_stats)
-                    self._format_sheet(worksheet, key_stats, writer.book)
+                    self.formatter.set_column_widths(worksheet, key_stats)
+                    self.formatter.format_sheet(worksheet, key_stats, writer.book)
 
                 self.logger.info(f"已添加{data_type_name}重点收支数据表，原始数据 {len(key_transactions)} 笔，统计数据 {len(key_stats)} 人")
             else:

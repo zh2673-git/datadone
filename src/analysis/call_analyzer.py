@@ -6,9 +6,9 @@ import numpy as np
 from typing import List, Dict, Union, Optional
 from datetime import datetime
 
-from src.base import BaseAnalyzer
-from src.datasource import CallDataModel
-from src.group import GroupManager
+from .base_analyzer import BaseAnalyzer
+from ..model.call_model import CallDataModel
+from ..utils.group import GroupManager
 
 class CallAnalyzer(BaseAnalyzer):
     """
@@ -23,8 +23,7 @@ class CallAnalyzer(BaseAnalyzer):
         data_model : CallDataModel
             话单数据模型
         group_manager : GroupManager, optional
-            分组管理器
-        config : dict, optional
+            分组管理�?        config : dict, optional
             配置字典
         """
         if not isinstance(data_model, CallDataModel):
@@ -35,17 +34,17 @@ class CallAnalyzer(BaseAnalyzer):
     
     def analyze(self, source_name: Optional[str] = None) -> Dict[str, pd.DataFrame]:
         """
-        执行话单数据分析, 按数据来源进行聚合.
+        执行话单数据分析, 按数据来源进行聚�?
         
         Parameters:
         -----------
         source_name : str, optional
-            数据来源名称 (例如 '吴平一家明细.xlsx'). 如果提供, 只分析此来源.
+            数据来源名称 (例如 '吴平一家明�?xlsx'). 如果提供, 只分析此来源.
             
         Returns:
         --------
         Dict[str, pd.DataFrame]
-            分析结果, 键为结果名 (例如 '吴平一家明细.xlsx_通话频率'), 值为结果数据
+            分析结果, 键为结果�?(例如 '吴平一家明�?xlsx_通话频率'), 值为结果数据
         """
         all_results = {}
         
@@ -115,15 +114,19 @@ class CallAnalyzer(BaseAnalyzer):
 
         # 获取相关列名
         name_col = self.call_model.name_column
-        opposite_number_col = self.call_model.opposite_phone_column
+        opposite_number_col = self.call_model.opposite_column
         opposite_name_col = self.call_model.opposite_name_column
-        opposite_company_col = self.call_model.opposite_company_column
-        opposite_position_col = self.call_model.opposite_position_column
+        opposite_company_col = self.call_model.opposite_unit_column
+        opposite_position_col = self.call_model.opposite_title_column
         date_col = self.call_model.date_column
         duration_col = self.call_model.duration_column
         
         # 解决"对方姓名"为空导致整行被分组忽略的问题
-        df[opposite_name_col] = df[opposite_name_col].fillna('未知')
+        if opposite_name_col in df.columns:
+            df[opposite_name_col] = df[opposite_name_col].fillna('未知')
+        else:
+            # 如果没有对方姓名字段，创建一个默认值
+            df[opposite_name_col] = '未知'
 
         # 安全地处理"对方号码"字段
         if opposite_number_col in df.columns:
@@ -132,7 +135,7 @@ class CallAnalyzer(BaseAnalyzer):
             # 如果没有对方号码字段，创建一个默认值
             df[opposite_number_col] = '无号码'
 
-        # 定义分组键, 按本方、对方、对方号码分组，实现逐行显示
+        # 定义分组：按本方、对方、对方号码分组，实现逐行显示
         group_cols = [name_col, opposite_name_col, opposite_number_col]
 
         # 1. 聚合计算
@@ -289,7 +292,7 @@ class CallAnalyzer(BaseAnalyzer):
             return pd.DataFrame()
         
         # 按通话时长排序
-        sorted_result = frequency_result.sort_values(by='通话总时长', ascending=False)
+        sorted_result = frequency_result.sort_values(by='通话总时长(分钟)', ascending=False)
         
         # 返回前N条记录
-        return sorted_result.head(top_n) 
+        return sorted_result.head(top_n)

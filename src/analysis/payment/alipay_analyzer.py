@@ -7,8 +7,8 @@ from typing import List, Dict, Union, Optional
 from datetime import datetime
 
 from src.analysis.payment import PaymentAnalyzer
-from src.datasource.payment.alipay_model import AlipayDataModel
-from src.group import GroupManager
+from ...model.alipay_model import AlipayDataModel
+from src.utils.group import GroupManager
 
 class AlipayAnalyzer(PaymentAnalyzer):
     """
@@ -77,4 +77,4 @@ class AlipayAnalyzer(PaymentAnalyzer):
             
             results[f"{source}_支付宝交易类型"] = type_stats.sort_values('总交易次数', ascending=False)
         
-        return results 
+        return results

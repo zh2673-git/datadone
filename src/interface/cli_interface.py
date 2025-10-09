@@ -8,9 +8,12 @@ import pandas as pd
 from datetime import datetime
 import traceback
 
-from src.base import BaseDataModel
-from src.datasource import BankDataModel, CallDataModel, WeChatDataModel, AlipayDataModel
-from src.group import GroupManager
+from ..model.base_model import BaseDataModel
+from ..model.bank_model import BankDataModel
+from ..model.call_model import CallDataModel
+from ..model.wechat_model import WeChatDataModel
+from ..model.alipay_model import AlipayDataModel
+from src.utils.group import GroupManager
 from src.analysis import BankAnalyzer, CallAnalyzer, WeChatAnalyzer, AlipayAnalyzer, ComprehensiveAnalyzer
 from src.export import ExcelExporter, WordExporter
 
@@ -21,18 +24,17 @@ from src.utils.config import Config
 
 class CommandLineInterface(BaseInterface):
     """
-    命令行交互界面
-    """
+    �����н�����??    """
     def __init__(self, data_path: str = 'data', config=None):
         """
-        初始化命令行交互界面
+        ��ʼ�������н�������
         
         Parameters:
         -----------
         data_path : str, optional
-            数据文件夹路径，默认为 'data'
+            �����ļ���·����Ĭ��??'data'
         config : Config, optional
-            配置对象，默认为 None
+            ���ö���Ĭ��Ϊ None
         """
         super().__init__(data_path)
         
@@ -42,10 +44,10 @@ class CommandLineInterface(BaseInterface):
         # 初始化分组管理器
         self.group_manager = GroupManager()
         
-        # 初始化分析器
+        # 初始化分析器字典
         self.analyzers: Dict[str, Optional[Any]] = {}
         
-        # 初始化结果
+        # 初始化分析结果字典
         self.analysis_results: Dict[str, pd.DataFrame] = {}
         
         # 初始化配置
@@ -56,7 +58,7 @@ class CommandLineInterface(BaseInterface):
         self.word_exporter = WordExporter(config=self.config)
         self.logger = logging.getLogger('main')
         
-        # 如果启用了热重载，则启动监控
+        # 如果配置了自动重载，启动文件监控
         if self.config.get('app', {}).get('config_auto_reload', False):
             self.config.start_watching()
         
@@ -68,11 +70,11 @@ class CommandLineInterface(BaseInterface):
         self.export_to_excel = export_to_excel.__get__(self)
         self.generate_word_report = generate_word_report.__get__(self)
         
-        self.logger.info("分析器已重新初始化")
+        self.logger.info("命令行界面初始化完成")
     
     def start(self):
         """
-        启动命令行交互界面
+        启动命令行界面主循环
         """
         super().start()
         
@@ -80,9 +82,8 @@ class CommandLineInterface(BaseInterface):
         while True:
             choice = self.display_main_menu()
             
-            if choice == -1:  # 退出
-                print("\n感谢使用多源数据分析系统，再见！")
-                # 停止配置文件监控
+            if choice == -1:  # 退出系统
+                # 停止加载文件
                 if self.config.get('app', {}).get('config_auto_reload', False):
                     self.config.stop_watching()
                 break
@@ -133,14 +134,14 @@ class CommandLineInterface(BaseInterface):
     def load_data(self):
         """
         加载数据
-        自动加载data文件夹下的所有表格数据
+        自动加载data文件夹下的所有Excel文件
         """
         print("\n=> 步骤 1: 加载数据")
         print("-" * 20)
         
         self.auto_load_all_data()
         
-        # 数据加载后，重新初始化分析器
+        # 数据加载后重新初始化分析器
         self._initialize_analyzers()
         self.display_success("数据加载和预处理完成")
     
@@ -148,7 +149,7 @@ class CommandLineInterface(BaseInterface):
         """
         自动加载data文件夹中的所有Excel文件
         """
-        print("\n自动加载所有数据")
+        print("\n自动加载数据中...")
         print("-" * 20)
         
         data_dir = "data"
@@ -168,11 +169,11 @@ class CommandLineInterface(BaseInterface):
         for i, file in enumerate(excel_files, 1):
             print(f"{i}. {file}")
         
-        # 对每个文件尝试自动识别类型并加载
+        # 对每个文件进行自动识别类型并加载
         loaded_count = 0
         for file_path in excel_files:
             try:
-                # 读取前几行数据用于识别
+                # 读取前几行数据进行类型识别
                 df_preview = pd.read_excel(file_path, nrows=5)
                 columns = df_preview.columns.tolist()
                 
@@ -193,7 +194,7 @@ class CommandLineInterface(BaseInterface):
             
     def identify_data_type(self, columns):
         """
-        根据列名识别数据类型
+        根据列名识别数据类型，基于配置文件中的字段配置
         
         Parameters:
         -----------
@@ -203,36 +204,118 @@ class CommandLineInterface(BaseInterface):
         Returns:
         --------
         str
-            数据类型：'bank', 'call', 'wechat', 'alipay' 或 None(无法识别)
+            数据类型 'bank', 'call', 'wechat', 'alipay' 或None(无法识别)
         """
         columns_set = set(columns)
+        
+        # 从配置文件中获取每种数据类型的字段配置
+        data_source_configs = self.config.get('data_sources', {})
+        
+        # 定义每种数据类型的关键字段列表（基于配置文件）
+        bank_fields = [
+            data_source_configs.get('bank', {}).get('name_column', '本方姓名'),
+            data_source_configs.get('bank', {}).get('date_column', '交易日期'),
+            data_source_configs.get('bank', {}).get('amount_column', '交易金额'),
+            data_source_configs.get('bank', {}).get('balance_column', '账户余额'),
+            data_source_configs.get('bank', {}).get('type_column', '交易类型'),
+            data_source_configs.get('bank', {}).get('direction_column', '借贷标识'),
+            data_source_configs.get('bank', {}).get('opposite_name_column', '对方姓名'),
+            data_source_configs.get('bank', {}).get('bank_name_column', '银行类型'),
+            data_source_configs.get('bank', {}).get('account_column', '本方账号')
+        ]
+        
+        call_fields = [
+            data_source_configs.get('call', {}).get('name_column', '本方姓名'),
+            data_source_configs.get('call', {}).get('date_column', '呼叫日期'),
+            data_source_configs.get('call', {}).get('time_column', '时间'),
+            data_source_configs.get('call', {}).get('duration_column', '通话时长'),
+            data_source_configs.get('call', {}).get('opposite_name_column', '对方姓名'),
+            data_source_configs.get('call', {}).get('opposite_number_column', '对方号码'),
+            data_source_configs.get('call', {}).get('call_type_column', '呼叫类型'),
+            data_source_configs.get('call', {}).get('special_date_column', '特殊日期名称')
+        ]
+        
+        wechat_fields = [
+            data_source_configs.get('wechat', {}).get('name_column', '本方姓名'),
+            data_source_configs.get('wechat', {}).get('account_column', '本方微信账号'),
+            data_source_configs.get('wechat', {}).get('date_column', '交易日期'),
+            data_source_configs.get('wechat', {}).get('time_column', '交易时间'),
+            data_source_configs.get('wechat', {}).get('amount_column', '交易金额'),
+            data_source_configs.get('wechat', {}).get('balance_column', '账户余额'),
+            data_source_configs.get('wechat', {}).get('type_column', '交易类型'),
+            data_source_configs.get('wechat', {}).get('direction_column', '借贷标识'),
+            data_source_configs.get('wechat', {}).get('opposite_name_column', '对方姓名'),
+            data_source_configs.get('wechat', {}).get('opposite_account_column', '对方微信账号'),
+            data_source_configs.get('wechat', {}).get('payment_method_column', '支付方式'),
+            data_source_configs.get('wechat', {}).get('merchant_name_column', '商户名称')
+        ]
+        
+        alipay_fields = [
+            data_source_configs.get('alipay', {}).get('name_column', '本方姓名'),
+            data_source_configs.get('alipay', {}).get('account_column', '本方账号'),
+            data_source_configs.get('alipay', {}).get('date_column', '交易日期'),
+            data_source_configs.get('alipay', {}).get('time_column', '交易时间'),
+            data_source_configs.get('alipay', {}).get('amount_column', '交易金额'),
+            data_source_configs.get('alipay', {}).get('type_column', '交易类型'),
+            data_source_configs.get('alipay', {}).get('direction_column', '借贷标识'),
+            data_source_configs.get('alipay', {}).get('opposite_name_column', '对方姓名'),
+            data_source_configs.get('alipay', {}).get('opposite_account_column', '对方账号'),
+            data_source_configs.get('alipay', {}).get('payment_method_column', '支付方式'),
+            data_source_configs.get('alipay', {}).get('product_name_column', '交易商品名称')
+        ]
 
-        # 定义每种数据类型所需的关键列
-        required_bank_columns = {'本方姓名', '本方账号', '交易金额', '借贷标识', '交易摘要', '对方姓名'}
-        required_call_columns = {'本方姓名', '本方号码', '通话时长', '对方号码', '呼叫类型'}
-        required_wechat_columns = {'本方姓名', '本方微信账号', '交易金额', '交易说明', '对方姓名'}
-        required_alipay_columns = {'本方姓名', '交易类型', '交易日期', '交易金额', '支付方式', '交易商品名称', '对方姓名'}
+        # 计算每种数据类型的匹配分数（基于配置文件中的字段）
+        bank_score = sum(1 for field in bank_fields if any(field in col for col in columns))
+        call_score = sum(1 for field in call_fields if any(field in col for col in columns))
+        wechat_score = sum(1 for field in wechat_fields if any(field in col for col in columns))
+        alipay_score = sum(1 for field in alipay_fields if any(field in col for col in columns))
 
-        # 按严格匹配度进行识别
-        if columns_set.issuperset(required_bank_columns):
-            return 'bank'
-        if columns_set.issuperset(required_call_columns):
-            return 'call'
-        if columns_set.issuperset(required_wechat_columns):
-            return 'wechat'
-        if columns_set.issuperset(required_alipay_columns):
-            return 'alipay'
+        # 增加特定关键词的权重：如果包含特定关键词，则增加分数
+        if any('支付宝' in col for col in columns):
+            alipay_score += 5  # 大幅增加支付宝关键词的权重
+        if any('微信' in col for col in columns):
+            wechat_score += 5  # 大幅增加微信关键词的权重
+        if any('银行' in col for col in columns):
+            bank_score += 3  # 增加银行关键词的权重
+        if any('通话' in col for col in columns) or any('电话' in col for col in columns):
+            call_score += 3  # 增加通话/电话关键词的权重
+
+        # 设置阈值，匹配分数达到3分以上才识别
+        scores = {
+            'bank': bank_score,
+            'call': call_score, 
+            'wechat': wechat_score,
+            'alipay': alipay_score
+        }
+        
+        # 找到最高分的数据类型
+        max_score_type = max(scores, key=scores.get)
+        max_score = scores[max_score_type]
+        
+        # 如果最高分达到阈值，但存在分数相同的情况，优先识别更具体的数据类型
+        if max_score >= 3:
+            # 检查是否有多个类型达到相同分数
+            tied_types = [t for t, s in scores.items() if s == max_score]
+            
+            if len(tied_types) > 1:
+                # 优先顺序：微信/支付宝 > 银行 > 话单
+                priority_order = ['wechat', 'alipay', 'bank', 'call']
+                for data_type in priority_order:
+                    if data_type in tied_types:
+                        return data_type
+            
+            return max_score_type
         
         return None
             
     def load_specific_data(self, data_type, file_path):
         """
-        加载特定类型的数据，并支持将多个同类型文件合并。
+        加载特定类型的数据，并支持将相同类型的文件合并
         
         Parameters:
         -----------
         data_type : str
-            数据类型：'bank', 'call', 'wechat', 'alipay'
+            数据类型 'bank', 'call', 'wechat', 'alipay'
         file_path : str
             数据文件路径
         """
@@ -242,11 +325,11 @@ class CommandLineInterface(BaseInterface):
                 return
 
             if self.data_models.get(data_type):
-                # 如果模型已存在，则加载新数据并合并
+                # 如果模型已存在，则将新数据合并到现有数据中
                 existing_model = self.data_models[data_type]
-                self.logger.info(f"模型 {data_type} 已存在，追加数据源: {file_path}")
+                self.logger.info(f"模型 {data_type} 已存在，追加数据: {file_path}")
                 
-                # 加载新文件到临时模型
+                # 创建临时模型加载新文件
                 temp_model = model_class(data_path=file_path)
                 
                 if not temp_model.data.empty:
@@ -271,16 +354,16 @@ class CommandLineInterface(BaseInterface):
     def get_model_class(self, data_type: str):
         """获取数据类型对应的模型类"""
         if data_type == 'bank':
-            from src.datasource import BankDataModel
+            from ..model.bank_model import BankDataModel
             return BankDataModel
         elif data_type == 'call':
-            from src.datasource import CallDataModel
+            from ..model.call_model import CallDataModel
             return CallDataModel
         elif data_type == 'wechat':
-            from src.datasource.payment.wechat_model import WeChatDataModel
+            from ..model.wechat_model import WeChatDataModel
             return WeChatDataModel
         elif data_type == 'alipay':
-            from src.datasource.payment.alipay_model import AlipayDataModel
+            from ..model.alipay_model import AlipayDataModel
             return AlipayDataModel
         return None
             
@@ -291,7 +374,7 @@ class CommandLineInterface(BaseInterface):
         Parameters:
         -----------
         data_type : str
-            数据类型：'bank', 'call', 'wechat', 'alipay'
+            数据类型 'bank', 'call', 'wechat', 'alipay'
         model : BaseDataModel
             数据模型
             
@@ -307,10 +390,10 @@ class CommandLineInterface(BaseInterface):
             from src.analysis import CallAnalyzer
             return CallAnalyzer(model, self.group_manager, self.config)
         elif data_type == 'wechat':
-            from src.analysis.payment.wechat_analyzer import WeChatAnalyzer
+            from src.analysis import WeChatAnalyzer
             return WeChatAnalyzer(model, self.group_manager, self.config)
         elif data_type == 'alipay':
-            from src.analysis.payment.alipay_analyzer import AlipayAnalyzer
+            from src.analysis import AlipayAnalyzer
             return AlipayAnalyzer(model, self.group_manager, self.config)
         return None
     
@@ -332,9 +415,9 @@ class CommandLineInterface(BaseInterface):
             
     def _initialize_analyzers(self):
         """
-        根据加载的数据模型初始化或重新初始化分析器
+        根据加载的数据模型重新初始化分析器
         """
-        # 清空现有分析器
+        # 清空所有分析器
         self.analyzers = {}
 
         # 为每个有数据的模型创建分析器
@@ -342,22 +425,22 @@ class CommandLineInterface(BaseInterface):
             if model and not model.data.empty:
                 self.analyzers[data_type] = self.create_analyzer(data_type, model)
         
-        # 如果存在多个分析器，则创建综合分析器
+        # 如果存在多个数据类型则创建综合分析器
         if len(self.analyzers) > 1:
             from src.analysis import ComprehensiveAnalyzer
             self.analyzers['comprehensive'] = ComprehensiveAnalyzer(self.data_models, self.group_manager, self.config)
             
-        self.logger.info("分析器已重新初始化")
+        self.logger.info("分析器重新初始化完成")
 
     # -----------------------------------------------------
     # 分析和导出相关的交互逻辑
     # -----------------------------------------------------
     def run_analysis_menu(self):
         """
-        显示并处理分析功能的顶层菜单。
+        显示分析功能的多级菜单
         """
         options = [
-            "对所有已加载数据执行全部分析",
+            "对已加载数据执行全部分析",
             "对特定数据类型进行专项分析",
             "返回主菜单"
         ]
@@ -365,7 +448,7 @@ class CommandLineInterface(BaseInterface):
         while True:
             choice = self.display_menu(options, "执行分析")
             
-            if choice == -1 or choice == 2:  # 用户选择返回或退出
+            if choice == -1 or choice == 2:  # 用户选择返回或取消
                 break
             
             if choice == 0:
@@ -375,11 +458,11 @@ class CommandLineInterface(BaseInterface):
 
     def run_specific_analysis_menu(self):
         """
-        显示并处理专项分析的子菜单，只列出已加载数据的选项。
+        显示分析专项功能的子菜单，只列出已加载数据的选项
         """
         analyzer_map = {
             "银行数据分析": self.run_bank_analysis,
-            "话单数据分析": self.run_call_analysis,
+            "通话数据分析": self.run_call_analysis,
             "微信数据分析": self.run_wechat_analysis,
             "支付宝数据分析": self.run_alipay_analysis,
             "综合分析": self.run_comprehensive_analysis,
@@ -388,7 +471,7 @@ class CommandLineInterface(BaseInterface):
         menu_options = {name: func for name, func in analyzer_map.items() if self.is_analyzer_available(name)}
 
         if not menu_options:
-            self.display_error("没有已加载并可供分析的数据类型。请先加载数据。")
+            self.display_error("没有已加载且可用的数据类型。请先加载数据。")
             return
 
         options = list(menu_options.keys())
@@ -400,10 +483,10 @@ class CommandLineInterface(BaseInterface):
             action()
 
     def is_analyzer_available(self, analyzer_key_name: str) -> bool:
-        """检查一个分析器是否可用 (基于菜单名)"""
+        """检查一个分析器是否可用 (用于菜单过滤)"""
         key_map = {
             "银行数据分析": "bank",
-            "话单数据分析": "call",
+            "通话数据分析": "call",
             "微信数据分析": "wechat",
             "支付宝数据分析": "alipay",
             "综合分析": "comprehensive"
@@ -425,7 +508,7 @@ class CommandLineInterface(BaseInterface):
 
     def _run_analysis_by_source(self, analyzer_name: str, analysis_type_options: Optional[List[str]] = None, **kwargs):
         """
-        运行指定分析器的方法，并支持按数据来源选择分析
+        执行指定分析器的分析，支持按数据来源选择
         
         Parameters:
         ----------
@@ -443,25 +526,25 @@ class CommandLineInterface(BaseInterface):
                 self.display_error(f"分析器 {analyzer_name} 不存在或未初始化")
                 return
             
-            # 获取该分析器可用的数据源
+            # 获取该分析器可用的数据来源
             sources = analyzer.data_model.get_data_sources()
             if not sources:
-                self.display_error(f"{analyzer_name} 分析器没有可用的数据源")
+                self.display_error(f"{analyzer_name} 数据中没有可用的数据来源")
                 return
             
-            # 如果有多个数据源，让用户选择
+            # 如果有多个数据来源，让用户选择
             source = None
             if len(sources) > 1:
-                source_options = ["所有数据源"] + sources
-                source_choice = self.display_menu(source_options, f"请选择要分析的{analyzer_name}数据源", allow_empty=True)
+                source_options = ["所有数据来源"] + sources
+                source_choice = self.display_menu(source_options, f"请选择要分析的{analyzer_name}数据", allow_empty=True)
                 if source_choice == -1:
                     return  # 用户取消
                 elif source_choice == 0:
-                    source = None  # 分析所有数据源
+                    source = None  # 分析所有数据来源
                 else:
                     source = source_options[source_choice]
             else:
-                source = sources[0]  # 只有一个数据源
+                source = sources[0]  # 只有一个数据来源
             
             # 如果有分析类型选项，让用户选择
             if analysis_type_options:
@@ -476,50 +559,50 @@ class CommandLineInterface(BaseInterface):
             
             # 执行分析
             if source:
-                self.logger.info(f"对数据来源 {source} 执行 {analyzer_name} 分析...")
+                self.logger.info(f"针对来源 {source} 执行 {analyzer_name} 分析...")
             else:
-                self.logger.info(f"对所有数据源执行 {analyzer_name} 分析...")
+                self.logger.info(f"针对所有数据来源执行 {analyzer_name} 分析...")
             
-            # 使用kwargs解包来传递analysis_type或其他额外参数
+            # 使用kwargs传递analysis_type等参数
             results = analyzer.analyze(source_name=source, **kwargs)
 
             if results:
                 for key, df in results.items():
                     self.analysis_results[key] = df
                 if source:
-                    self.display_success(f"已完成数据来源 '{source}' 的 {analyzer_name} 分析")
+                    self.display_success(f"成功针对来源 '{source}' 执行 {analyzer_name} 分析")
                 else:
-                    self.display_success(f"已完成所有数据源的 {analyzer_name} 分析")
+                    self.display_success(f"成功针对所有数据来源执行 {analyzer_name} 分析")
             else:
                 self.display_warning(f"{analyzer_name} 分析没有返回结果")
         except Exception as e:
-            self.logger.error(f"运行 {analyzer_name} 分析失败: {e}")
+            self.logger.error(f"执行 {analyzer_name} 分析失败: {e}")
             self.logger.debug(traceback.format_exc())
-            self.display_error(f"运行 {analyzer_name} 分析失败: {str(e)}")
+            self.display_error(f"执行 {analyzer_name} 分析失败: {str(e)}")
 
     def run_comprehensive_analysis(self):
         """
-        执行综合分析, 对每种可用的数据类型作为基准都进行一次分析
+        执行综合分析, 以每种可用的数据类型为基准分别进行一次分析
         """
         print("\n=> 执行综合分析")
         print("-" * 20)
         
         if 'comprehensive' not in self.analyzers or not self.analyzers['comprehensive']:
-            self.display_error("综合分析器未初始化，请先加载至少两种数据")
+            self.display_error("综合分析器未初始化，请先加载多种类型数据")
             return
             
-        # 找出所有已加载数据且不为空的数据类型
+        # 找出所有已加载且不为空的数据类型
         available_sources = [
             data_type for data_type, model in self.data_models.items() 
             if model and not model.data.empty
         ]
         
         if len(available_sources) < 2:
-            self.display_warning("综合分析需要至少两种数据，当前不足。")
+            self.display_warning("综合分析需要多种类型数据，当前数据不足")
             return
 
         total_results = {}
-        self.display_info(f"将对以下基准进行综合分析: {', '.join(available_sources)}")
+        self.display_info(f"将基于以下基准进行综合分析: {', '.join(available_sources)}")
 
         for base_source in available_sources:
             try:
@@ -527,23 +610,23 @@ class CommandLineInterface(BaseInterface):
                 results = self.analyzers['comprehensive'].analyze(base_source=base_source)
                 if results:
                     total_results.update(results)
-                    self.display_success(f"以 {base_source} 为基准的综合分析完成")
+                    self.display_success(f"以 {base_source} 为基准综合分析完成")
                 else:
-                    self.display_warning(f"以 {base_source} 为基准的综合分析未生成任何结果")
+                    self.display_warning(f"以 {base_source} 为基准综合分析未产生任何结果")
             except Exception as e:
-                self.display_error(f"以 {base_source} 为基准的综合分析失败: {e}")
-                self.logger.error(f"以 {base_source} 为基准的综合分析失败: {e}\n{traceback.format_exc()}")
+                self.display_error(f"以 {base_source} 为基准综合分析失败: {e}")
+                self.logger.error(f"以 {base_source} 为基准综合分析失败: {e}\n{traceback.format_exc()}")
         
         if total_results:
             self.analysis_results.update(total_results)
-            self.display_success("\n所有综合分析完成")
-            self.logger.info(f"综合分析生成的结果键: {list(total_results.keys())}")
+            self.display_success("\n综合分析完成")
+            self.logger.info(f"综合分析产生的结果键: {list(total_results.keys())}")
             self.display_results_summary(total_results)
         else:
-            self.display_warning("\n所有综合分析均未生成任何结果")
+            self.display_warning("\n综合分析未产生任何结果")
 
     def run_all_analysis(self):
-        """对所有数据来源执行所有类型的分析"""
+        """对所有可用数据源执行所有类型的分析"""
         self.display_message("执行全部分析")
         self.analysis_results = {}
         
@@ -554,12 +637,12 @@ class CommandLineInterface(BaseInterface):
         has_data = any(self.analyzers.get(key) for key in analyzers_to_run)
         
         if not has_data:
-            self.display_error("没有加载任何数据，无法执行分析。")
+            self.display_error("没有加载任何数据，无法执行分析")
             return
 
         for an_type, an_params in analyzers_to_run.items():
             if self.analyzers.get(an_type):
-                self.display_message(f"--- 正在执行 {an_type} 分析 ---")
+                self.display_message(f"--- 开始执行 {an_type} 分析 ---")
                 try:
                     results = self.analyzers[an_type].analyze(**an_params)
                     if results:
@@ -568,7 +651,7 @@ class CommandLineInterface(BaseInterface):
                     self.display_error(f"{an_type} 分析失败: {e}")
         
         if self.analyzers.get('comprehensive'):
-            self.display_message("--- 正在执行综合分析 ---")
+            self.display_message("--- 执行综合分析 ---")
             try:
                 comp_results = self.analyzers['comprehensive'].analyze()
                 if comp_results:
@@ -576,10 +659,10 @@ class CommandLineInterface(BaseInterface):
             except Exception as e:
                 self.display_error(f"综合分析失败: {e}")
 
-        self.display_success("\n所有分析已完成！")
+        self.display_success("\n分析完成")
         
         if self.analysis_results:
-            if self.get_yes_no_input("是否立即导出分析结果?"):
+            if self.get_yes_no_input("是否继续执行分析?"):
                 self.export_results_menu()
 
     def get_yes_no_input(self, prompt: str) -> bool:
@@ -599,4 +682,5 @@ class CommandLineInterface(BaseInterface):
         """
         Run the command line interface.
         """
-        self.start() 
+        self.start()
+

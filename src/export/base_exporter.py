@@ -7,8 +7,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Union
 import pandas as pd
 
-from src.utils.constants import FilePath
-from src.utils.exceptions import ExportError
+from ..utils.constants import FilePath
+from ..utils.exceptions import ExportError
 
 class BaseExporter(ABC):
     """
@@ -120,4 +120,4 @@ class BaseExporter(ABC):
         bool
             数据是否有效
         """
-        return isinstance(data, pd.DataFrame) and not data.empty 
+        return isinstance(data, pd.DataFrame) and not data.empty

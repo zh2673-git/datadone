@@ -44,7 +44,7 @@ def create_group(self):
     
     # 初始化分组管理器（如果尚未创建）
     if self.group_manager is None:
-        from src.group import GroupManager
+        from src.utils.group import GroupManager
         self.group_manager = GroupManager()
     
     # 获取分组名称
@@ -276,7 +276,7 @@ def import_groups(self):
     
     # 初始化分组管理器（如果尚未创建）
     if self.group_manager is None:
-        from src.group import GroupManager
+        from src.utils.group import GroupManager
         self.group_manager = GroupManager()
     
     try:
@@ -332,4 +332,4 @@ def update_analyzers_group_manager(self):
     更新所有分析器的分组管理器
     """
     for analyzer_type, analyzer in self.analyzers.items():
-        analyzer.group_manager = self.group_manager 
+        analyzer.group_manager = self.group_manager

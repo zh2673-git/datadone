@@ -10,7 +10,7 @@ class BaseDataModel(ABC):
     """
     数据模型基类，所有数据源模型都应继承此类
     """
-    def __init__(self, data_path=None, data=None):
+    def __init__(self, data_path=None, data=None, config=None):
         """
         初始化数据模型
         
@@ -20,8 +20,11 @@ class BaseDataModel(ABC):
             数据文件路径，如果提供则从文件加载数据
         data : pd.DataFrame, optional
             直接提供的数据，如果提供则使用此数据
+        config : Config, optional
+            配置对象，如果不提供则使用默认配置
         """
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.config = config
         
         if data is not None:
             self.data = data
@@ -209,4 +212,4 @@ class BaseDataModel(ABC):
         """
         返回数据描述
         """
-        return f"{self.__class__.__name__}: {len(self.data)} 行, {len(self.data.columns)} 列" 
+        return f"{self.__class__.__name__}: {len(self.data)} 行, {len(self.data.columns)} 列"

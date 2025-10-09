@@ -9,6 +9,15 @@ from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
+# 导入辅助函数模块
+from src.utils.export.word_helpers import (
+    format_time_range_to_year_month, is_numeric_value, format_dataframe_numbers,
+    to_chinese_numeral, add_df_to_doc, add_grouped_df_to_doc
+)
+from src.utils.analysis.behavior_analysis import (
+    analyze_cash_behavior, analyze_anomalies, analyze_regular_patterns, analyze_call_behavior
+)
+
 class WordExporter:
     def __init__(self, output_dir: str = 'output', config=None):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -43,7 +52,7 @@ class WordExporter:
         doc.add_heading('二、个人详细分析', level=2)
         doc.add_paragraph("本章节仅针对持有金融账户的个人进行详细分析。")
         for i, person_name in enumerate(persons_with_financials):
-            doc.add_heading(f'（{self._to_chinese_numeral(i + 1)}）{person_name}的综合分析', level=3)
+            doc.add_heading(f'（{to_chinese_numeral(i + 1)}）{person_name}的综合分析', level=3)
             
             # 生成各类型的详细分析内容
             if analyzers.get('bank'):
@@ -185,26 +194,26 @@ class WordExporter:
 
         # 存取现行为分析
         if bank_data:
-            cash_insights = self._analyze_cash_behavior(bank_data)
+            cash_insights = analyze_cash_behavior(bank_data)
             if cash_insights:
                 paragraphs.append(f"【存取现行为】{cash_insights}")
 
         # 异常行为提醒
         if advanced_data.get('anomalies', {}).get('anomalies'):
-            anomaly_insights = self._analyze_anomalies(advanced_data['anomalies'])
+            anomaly_insights = analyze_anomalies(advanced_data['anomalies'])
             if anomaly_insights:
                 paragraphs.append(f"【异常提醒】{anomaly_insights}")
 
         # 规律性分析
         if advanced_data:
-            pattern_insights = self._analyze_regular_patterns(advanced_data, bank_data)
+            pattern_insights = analyze_regular_patterns(advanced_data, bank_data)
             if pattern_insights:
                 paragraphs.append(f"【规律性分析】{pattern_insights}")
 
         # 通话行为分析
         call_data = summary_data.get('call_data', {})
         if call_data:
-            call_insights = self._analyze_call_behavior(call_data)
+            call_insights = analyze_call_behavior(call_data)
             if call_insights:
                 paragraphs.append(f"【通话行为】{call_insights}")
 
@@ -262,119 +271,10 @@ class WordExporter:
 
         return "；".join(insights) + "。" if insights else ""
 
-    def _analyze_cash_behavior(self, bank_data: Dict) -> str:
-        """分析存取现行为"""
-        insights = []
-
-        cash_count = bank_data.get('cash_transaction_count', 0)
-        deposit_count = bank_data.get('deposit_count', 0)
-        withdraw_count = bank_data.get('withdraw_count', 0)
-        deposit_amount = bank_data.get('deposit_amount', 0)
-        withdraw_amount = bank_data.get('withdraw_amount', 0)
-        total_count = bank_data.get('transaction_count', 0)
-
-        if cash_count > 0:
-            cash_ratio = cash_count / total_count if total_count > 0 else 0
-            if cash_ratio > 0.5:
-                insights.append("频繁进行存取现操作")
-            elif cash_ratio > 0.2:
-                insights.append("较常进行存取现操作")
-
-            if deposit_count > withdraw_count:
-                insights.append("存现次数多于取现")
-            elif withdraw_count > deposit_count:
-                insights.append("取现次数多于存现")
-
-            if deposit_amount > withdraw_amount * 2:
-                insights.append("存现金额显著大于取现金额")
-            elif withdraw_amount > deposit_amount * 2:
-                insights.append("取现金额显著大于存现金额")
-        else:
-            insights.append("无存取现交易记录")
-
-        return "；".join(insights) + "。" if insights else ""
-
-    def _analyze_anomalies(self, anomalies: Dict) -> str:
-        """分析异常情况"""
-        insights = []
-
-        anomaly_list = anomalies.get('anomalies', [])
-        for anomaly in anomaly_list:
-            anomaly_type = anomaly.get('type', '')
-            if anomaly_type == '高频交易':
-                count = anomaly.get('count', 0)
-                insights.append(f"存在高频交易异常（{count}次）")
-            elif anomaly_type == '金额异常':
-                amounts = anomaly.get('outlier_amounts', [])
-                if amounts:
-                    max_amount = max(amounts)
-                    insights.append(f"存在异常大额交易（{max_amount:,.0f}元）")
-            elif anomaly_type == '时间间隔异常':
-                insights.append("存在短时间连续交易")
-
-        return "；".join(insights) + "。" if insights else ""
-
-    def _analyze_regular_patterns(self, advanced_data: Dict, bank_data: Dict) -> str:
-        """分析规律性模式"""
-        insights = []
-
-        avg_amount = bank_data.get('avg_transaction_amount', 0)
-
-        # 推测可能的固定支出
-        if avg_amount > 0:
-            if 2000 <= avg_amount <= 8000:
-                insights.append("平均交易金额符合工资水平特征")
-            elif 1000 <= avg_amount <= 5000:
-                insights.append("平均交易金额符合房租或贷款特征")
-            elif avg_amount < 500:
-                insights.append("以小额日常消费为主")
-            elif avg_amount > 20000:
-                insights.append("以大额交易为主")
-
-        # 分析金额分布
-        amount_patterns = advanced_data.get('amount_patterns', {})
-        if amount_patterns:
-            ranges = amount_patterns.get('amount_ranges', {})
-            if ranges:
-                small_ratio = ranges.get('小额', {}).get('占比', 0)
-                large_ratio = ranges.get('大额', {}).get('占比', 0)
-
-                if small_ratio > 0.7:
-                    insights.append("主要为日常小额消费")
-                elif large_ratio > 0.3:
-                    insights.append("存在较多大额交易")
-
-        return "；".join(insights) + "。" if insights else ""
-
-    def _analyze_call_behavior(self, call_data: Dict) -> str:
-        """分析通话行为"""
-        insights = []
-
-        total_calls = call_data.get('total_calls', 0)
-        unique_contacts = call_data.get('unique_contacts', 0)
-        avg_duration = call_data.get('avg_call_duration', 0)
-
-        if total_calls > 0:
-            if total_calls > 1000:
-                insights.append("通话频率极高")
-            elif total_calls > 500:
-                insights.append("通话频率较高")
-            elif total_calls < 50:
-                insights.append("通话频率较低")
-
-            if unique_contacts > 0:
-                contact_ratio = total_calls / unique_contacts
-                if contact_ratio > 10:
-                    insights.append("与少数人频繁通话")
-                elif contact_ratio < 2:
-                    insights.append("联系人分布较广泛")
-
-            if avg_duration > 300:  # 5分钟
-                insights.append("通话时长较长")
-            elif avg_duration < 60:  # 1分钟
-                insights.append("通话时长较短")
-
-        return "；".join(insights) + "。" if insights else ""
+    # _analyze_cash_behavior函数已迁移到utils/analysis/behavior_analysis.py模块中
+    # _analyze_anomalies函数已迁移到utils/analysis/behavior_analysis.py模块中
+    # _analyze_regular_patterns函数已迁移到utils/analysis/behavior_analysis.py模块中
+    # _analyze_call_behavior函数已迁移到utils/analysis/behavior_analysis.py模块中
 
     def _save_document(self, doc: Document, title: str) -> Optional[str]:
         try:
@@ -580,7 +480,7 @@ class WordExporter:
                 ]
                 
                 # 添加到文档
-                self._add_df_to_doc(doc, display_df[display_columns])
+                add_df_to_doc(doc, display_df[display_columns])
             else:
                 doc.add_paragraph("没有找到有效的联系人信息。")
         else:
@@ -949,7 +849,7 @@ class WordExporter:
         """生成重点收支分析的概要段落"""
         try:
             # 导入重点收支识别引擎
-            from src.utils.key_transactions import KeyTransactionEngine
+            from src.utils.model.key_transactions import KeyTransactionEngine
 
             # 初始化重点收支识别引擎
             key_engine = KeyTransactionEngine(analyzer.config)
@@ -1121,7 +1021,7 @@ class WordExporter:
         final_df = final_df.fillna('N/A')
         
         # 格式化数值列
-        self._format_dataframe_numbers(final_df)
+        final_df = format_dataframe_numbers(final_df)
         
         # 定义最终显示列的顺序
         display_columns = [
@@ -1130,40 +1030,9 @@ class WordExporter:
         ]
         
         # 直接显示表格，相同本方姓名的记录会连续显示
-        self._add_df_to_doc(doc, final_df[display_columns])
+        add_df_to_doc(doc, final_df[display_columns])
 
-    def _add_grouped_df_to_doc(self, doc: Document, df: pd.DataFrame, group_by: str):
-        """
-        按指定列分组显示DataFrame，使结果更清晰
-
-        Parameters:
-        -----------
-        doc : Document
-            Word文档对象
-        df : pd.DataFrame
-            要显示的数据框
-        group_by : str
-            分组列名
-        """
-        if df.empty:
-            doc.add_paragraph("无数据可显示。")
-            return
-
-        # 按分组列分组
-        grouped = df.groupby(group_by)
-
-        for group_name, group_df in grouped:
-            # 添加分组标题
-            doc.add_paragraph(f"【{group_name}】", style='Heading 3')
-
-            # 为该分组创建表格，不显示分组列（因为已经在标题中显示了）
-            display_df = group_df.drop(columns=[group_by]).reset_index(drop=True)
-
-            # 添加表格
-            self._add_df_to_doc(doc, display_df)
-
-            # 添加空行分隔
-            doc.add_paragraph("")
+    # _add_grouped_df_to_doc函数已迁移到utils/export/word_helpers.py模块中
 
     def _add_top_opponent_tables(self, doc: Document, frequency_df: pd.DataFrame):
         """为资金分析添加Top5对手方表格"""
@@ -1218,70 +1087,13 @@ class WordExporter:
                 display_df['对方单位'] = display_df['对方单位'].fillna('N/A')
                 
                 # 添加到文档
-                self._add_df_to_doc(doc, display_df[display_cols])
+                add_df_to_doc(doc, display_df[display_cols])
 
-    def _to_chinese_numeral(self, num: int) -> str:
-        numerals = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
-        if 0 <= num < len(numerals):
-            return numerals[num]
-        return str(num)
+    # _to_chinese_numeral函数已迁移到utils/export/word_helpers.py模块中
 
-    def _format_dataframe_numbers(self, df: pd.DataFrame):
-        """格式化DataFrame中的数字列"""
-        for col in df.columns:
-            col_name_lower = col.lower()
-
-            # 金额列保留2位小数
-            if any(keyword in col for keyword in ['金额', '总额', '收入', '支出', '余额', '价格']):
-                df[col] = df[col].apply(
-                    lambda x: f"{float(x):.2f}" if self._is_numeric_value(x) else x
-                )
-            # 次数、序号等整数列
-            elif any(keyword in col for keyword in ['次数', '序号', '数量', '笔数', '个数', '排名']):
-                df[col] = df[col].apply(
-                    lambda x: str(int(float(x))) if self._is_numeric_value(x) else x
-                )
-            # 电话号码、银行卡号等保持原样（文本格式）
-            elif any(keyword in col for keyword in ['电话', '号码', '手机', '银行卡', '身份证', '卡号']):
-                df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) else x)
-
-    def _is_numeric_value(self, x):
-        """检查值是否为数字"""
-        if pd.isna(x):
-            return False
-        if isinstance(x, (int, float)):
-            return True
-        if isinstance(x, str):
-            try:
-                float(x)
-                return True
-            except ValueError:
-                return False
-        return False
-
-    def _add_df_to_doc(self, doc: Document, df: pd.DataFrame):
-        if df.empty:
-            doc.add_paragraph("无相关数据。")
-            return
-
-        # 格式化数值列
-        df_copy = df.copy()
-        self._format_dataframe_numbers(df_copy)
-
-        df_copy = df_copy.fillna('N/A').astype(str)
-
-        table = doc.add_table(rows=1, cols=len(df_copy.columns))
-        table.style = 'Table Grid'
-
-        # 设置表头
-        for i, column in enumerate(df_copy.columns):
-            table.cell(0, i).text = str(column)
-
-        # 添加数据行
-        for _, row in df_copy.iterrows():
-            cells = table.add_row().cells
-            for i, value in enumerate(row):
-                cells[i].text = str(value)
+    # _format_dataframe_numbers函数已迁移到utils/export/word_helpers.py模块中
+    # _is_numeric_value函数已迁移到utils/export/word_helpers.py模块中
+    # _add_df_to_doc函数已迁移到utils/export/word_helpers.py模块中
 
     def _generate_payment_key_transactions_summary(self, doc: Document, person_name: str, analyzer, payment_type: str, section_num: int):
         """
@@ -1302,7 +1114,7 @@ class WordExporter:
         """
         try:
             # 导入重点收支识别引擎
-            from src.utils.key_transactions import KeyTransactionEngine
+            from src.utils.model.key_transactions import KeyTransactionEngine
 
             # 获取配置对象
             config = self.config if hasattr(self, 'config') and self.config else getattr(analyzer.data_model, 'config', None)
@@ -1402,7 +1214,7 @@ class WordExporter:
         if work_income_total > 0:
             time_range = stats.get('时间范围', '')
             # 提取年月信息，去掉具体日期
-            time_range_formatted = self._format_time_range_to_year_month(time_range)
+            time_range_formatted = format_time_range_to_year_month(time_range)
 
             work_income_run = p.add_run("工作收入")
             work_income_run.underline = True
@@ -1422,7 +1234,7 @@ class WordExporter:
         # 资产收入部分 - 按照新格式：资产收入XX元（XX年XX月至XX年XX月，疑似与房有关XX次XX元、与车有关XX次XX元、与租金有关XX次XX元、理财XX次XX元）
         if asset_income_total > 0:
             time_range = stats.get('时间范围', '')
-            time_range_formatted = self._format_time_range_to_year_month(time_range)
+            time_range_formatted = format_time_range_to_year_month(time_range)
 
             property_count = stats.get('房产收入次数', 0)
             property_amount = stats.get('房产收入金额', 0)
@@ -1464,7 +1276,7 @@ class WordExporter:
         # 资产支出部分 - 按照新格式：资产支出XX元（XX年XX月至XX年XX月，疑似与房有关XX次XX元、与车有关XX次XX元、与租金有关XX次XX元、理财XX次XX元）
         if asset_expense_total > 0:
             time_range = stats.get('时间范围', '')
-            time_range_formatted = self._format_time_range_to_year_month(time_range)
+            time_range_formatted = format_time_range_to_year_month(time_range)
 
             property_expense_count = stats.get('房产支出次数', 0)
             property_expense_amount = stats.get('房产支出金额', 0)
@@ -1549,47 +1361,4 @@ class WordExporter:
             if p.runs and p.runs[-1].text.endswith("；"):
                 p.runs[-1].text = p.runs[-1].text[:-1] + "。"
 
-    def _format_time_range_to_year_month(self, time_range: str) -> str:
-        """
-        将时间范围格式化为年月格式，去掉具体日期
-
-        Parameters:
-        -----------
-        time_range : str
-            原始时间范围，格式如 "2023-01-15 至 2023-12-30"
-
-        Returns:
-        --------
-        str
-            格式化后的时间范围，格式如 "2023年01月至2023年12月"
-        """
-        try:
-            if ' 至 ' in time_range:
-                start_date, end_date = time_range.split(' 至 ')
-
-                # 提取年月信息
-                if '-' in start_date:
-                    start_parts = start_date.split('-')
-                    if len(start_parts) >= 2:
-                        start_year, start_month = start_parts[0], start_parts[1]
-                        start_formatted = f"{start_year}年{start_month}月"
-                    else:
-                        start_formatted = start_date
-                else:
-                    start_formatted = start_date
-
-                if '-' in end_date:
-                    end_parts = end_date.split('-')
-                    if len(end_parts) >= 2:
-                        end_year, end_month = end_parts[0], end_parts[1]
-                        end_formatted = f"{end_year}年{end_month}月"
-                    else:
-                        end_formatted = end_date
-                else:
-                    end_formatted = end_date
-
-                return f"{start_formatted}至{end_formatted}"
-            else:
-                return time_range
-        except Exception:
-            return time_range
+    # _format_time_range_to_year_month函数已迁移到utils/export/word_helpers.py模块中

@@ -7,11 +7,11 @@ from typing import List, Dict, Union, Optional, Any
 from datetime import datetime
 from zhdate import ZhDate
 
-from src.base import BaseAnalyzer
-from src.datasource.payment import PaymentDataModel
-from src.group import GroupManager
-from src.utils.constants import ColumnName
-from src.utils.exceptions import InvalidArgumentError
+from ..base_analyzer import BaseAnalyzer
+from ...model.payment_model import PaymentDataModel
+from ...utils.group import GroupManager
+from ...utils.constants import ColumnName
+from ...utils.exceptions import InvalidArgumentError
 
 class PaymentAnalyzer(BaseAnalyzer):
     """
@@ -26,7 +26,7 @@ class PaymentAnalyzer(BaseAnalyzer):
         data_model : PaymentDataModel
             支付数据模型
         group_manager : GroupManager, optional
-            分组管理器
+            分组管理�?
         config : dict, optional
             配置字典
         """
@@ -38,22 +38,22 @@ class PaymentAnalyzer(BaseAnalyzer):
     
     def analyze(self, analysis_type: str = 'all', source_name: Optional[str] = None) -> Dict[str, pd.DataFrame]:
         """
-        执行支付数据分析, 按数据来源进行聚合。
+        执行支付数据分析, 按数据来源进行聚合�?
         
         Parameters:
         -----------
         analysis_type : str
-            分析类型，可选值为'frequency'(频率)、'special'(特殊分析)或'all'(全部)
+            分析类型，可选值为'frequency'(频率)�?special'(特殊分析)�?all'(全部)
         source_name : str, optional
-            数据来源名称 (例如 '吴平一家明细.xlsx')。 如果提供, 只分析此来源。
+            数据来源名称 (例如 '吴平一家明�?xlsx')�?如果提供, 只分析此来源�?
             
         Returns:
         --------
         Dict[str, pd.DataFrame]
-            分析结果, 键为结果名 (例如 '吴平一家明细.xlsx_支付宝频率'), 值为结果数据
+            分析结果, 键为结果�?(例如 '吴平一家明�?xlsx_支付宝频�?), 值为结果数据
         """
         if analysis_type not in ['frequency', 'special', 'all']:
-            raise InvalidArgumentError(f"analysis_type必须是'frequency', 'special' 或'all'")
+            raise InvalidArgumentError(f"analysis_type必须�?frequency', 'special' �?all'")
 
         all_results = {}
         
@@ -100,11 +100,11 @@ class PaymentAnalyzer(BaseAnalyzer):
         if analysis_type in ['frequency', 'all']:
             frequency_result = self.analyze_frequency(source_data)
             if not frequency_result.empty:
-                # 使用子类名称作为类型标识，如"支付宝"或"微信"
+                # 使用子类名称作为类型标识，如"支付�?�?微信"
                 payment_type = self.__class__.__name__.replace('Analyzer', '')
                 results[f"{source_name}_{payment_type}频率"] = frequency_result
         
-        # 3. 特殊日月和金额分析
+        # 3. 特殊日月和金额分�?
         if analysis_type in ['special', 'all']:
             payment_type = self.__class__.__name__.replace('Analyzer', '')
             special_dates_result = self.analyze_special_dates(source_data)
@@ -143,7 +143,7 @@ class PaymentAnalyzer(BaseAnalyzer):
 
         # 获取相关列名
         name_col = self.payment_model.name_column
-        opposite_name_col = self.payment_model.opposite_name_column
+        opposite_name_col = self.payment_model.opposite_column
         date_col = self.payment_model.date_column
         
         # 定义分组键和聚合操作
@@ -154,7 +154,7 @@ class PaymentAnalyzer(BaseAnalyzer):
             self.payment_model.amount_column: 'count'
         }
         
-        # 按对方姓名进行分组统计
+        # 按对方姓名进行分组统�?
         result = data.groupby(group_cols).agg(agg_dict).reset_index()
         
         # 重命名列
@@ -181,7 +181,7 @@ class PaymentAnalyzer(BaseAnalyzer):
 
     def analyze_special_dates(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        分析特殊日期的交易 (支持农历和公历)
+        分析特殊日期的交�?(支持农历和公�?
 
         Parameters:
         -----------
@@ -201,7 +201,7 @@ class PaymentAnalyzer(BaseAnalyzer):
         df = data.copy()
         df[date_col] = pd.to_datetime(df[date_col])
         
-        # 预计算所有年份的节假日公历日期
+        # 预计算所有年份的节假日公历日�?
         years = df[date_col].dt.year.dropna().unique()
         holiday_map = {}
         for year_float in years:
@@ -214,7 +214,7 @@ class PaymentAnalyzer(BaseAnalyzer):
                         holiday_date = datetime(year, details['month'], details['day']).date()
                     holiday_map[holiday_date] = name
                 except (ValueError, TypeError) as e:
-                    self.logger.warning(f"无法计算日期 '{name}' 在 {year} 年: {e}")
+                    self.logger.warning(f"无法计算日期 '{name}' �?{year} �? {e}")
                     continue
         
         df['normalized_date'] = df[date_col].dt.date
@@ -226,7 +226,7 @@ class PaymentAnalyzer(BaseAnalyzer):
 
     def analyze_special_amounts(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        分析特殊金额的交易
+        分析特殊金额的交�?
 
         Parameters:
         -----------
@@ -257,12 +257,12 @@ class PaymentAnalyzer(BaseAnalyzer):
         data : pd.DataFrame
             要分析的数据
         platform_type : str
-            平台类型，'wechat' 或 'alipay'
+            平台类型�?wechat' �?'alipay'
 
         Returns:
         --------
         pd.DataFrame
-            整百数金额交易分析结果
+            整百数金额交易分析结�?
         """
         integer_config = self.config.get('analysis', {}).get('integer_amount', {})
         threshold_key = f'{platform_type}_threshold'
@@ -273,7 +273,7 @@ class PaymentAnalyzer(BaseAnalyzer):
 
         amount_col = self.payment_model.amount_column
 
-        # 筛选出大于等于阈值的整百数金额交易（能被100整除）
+        # 筛选出大于等于阈值的整百数金额交易（能被100整除�?
         integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 100 == 0)
         integer_transactions = data[integer_mask].copy()
 
@@ -313,7 +313,7 @@ class PaymentAnalyzer(BaseAnalyzer):
         Returns:
         --------
         Dict[str, pd.DataFrame]
-            分析结果，键为人名，值为该人的分析结果
+            分析结果，键为人名，值为该人的分析结�?
         """
         if self.group_manager is None:
             self.logger.warning("未提供分组管理器，无法按组分析")
@@ -324,7 +324,7 @@ class PaymentAnalyzer(BaseAnalyzer):
             self.logger.warning(f"找不到分组 {group_name}")
             return {}
         
-        # 对每个成员进行分析
+        # 对每个成员进行分�?
         results = {}
         for member in group_members:
             result = self.analyze_by_person(member)
@@ -335,24 +335,24 @@ class PaymentAnalyzer(BaseAnalyzer):
     
     def get_top_transactions(self, data: pd.DataFrame, top_n: int = 10, by_income: bool = True) -> pd.DataFrame:
         """
-        获取指定数据子集中的最高交易记录
+        获取指定数据子集中的最高交易记�?
         
         Parameters:
         -----------
         data : pd.DataFrame
             要分析的数据
         top_n : int
-            返回的记录数量
+            返回的记录数�?
         by_income : bool
-            是否按收入排序
+            是否按收入排�?
             
         Returns:
         --------
         pd.DataFrame
-            最高交易记录
+            最高交易记�?
         """
         if data.empty:
             return pd.DataFrame()
             
         sort_col = ColumnName.INCOME_AMOUNT if by_income else ColumnName.EXPENSE_AMOUNT
-        return data.nlargest(top_n, sort_col) 
+        return data.nlargest(top_n, sort_col)

@@ -8,9 +8,13 @@ import re
 from typing import List, Dict, Tuple, Optional
 import os
 
-from src.base import BaseDataModel
-from src.utils.config import Config
-from src.utils.cash_recognition import CashRecognitionEngine
+from .base_model import BaseDataModel
+from ..utils.config import Config
+from ..utils.model.cash_recognition import CashRecognitionEngine
+from ..utils.model.data_helpers import (
+    safe_to_numeric, validate_columns, convert_to_datetime,
+    add_missing_columns, extract_data_source, get_config_value
+)
 
 class BankDataModel(BaseDataModel):
     """
@@ -31,21 +35,21 @@ class BankDataModel(BaseDataModel):
         """
         self.config = config or Config()
         
-        # 定义列名配置
-        self.name_column = self.config.get('data_sources.bank.name_column', '本方姓名')
-        self.date_column = self.config.get('data_sources.bank.date_column', '交易日期')
-        self.amount_column = self.config.get('data_sources.bank.amount_column', '交易金额')
-        self.balance_column = self.config.get('data_sources.bank.balance_column', '账户余额')
-        self.type_column = self.config.get('data_sources.bank.type_column', '交易类型')
-        self.summary_column = self.config.get('data_sources.bank.summary_column', '交易摘要')
-        self.remark_column = self.config.get('data_sources.bank.remark_column', '交易备注')
-        self.direction_column = self.config.get('data_sources.bank.direction_column', '借贷标识')
-        self.opposite_name_column = self.config.get('data_sources.bank.opposite_name_column', '对方姓名')
-        self.special_date_column = self.config.get('data_sources.bank.special_date_column', '特殊日期名称')
-        self.income_flag = self.config.get('data_sources.bank.income_flag', '贷')    # 收入
-        self.expense_flag = self.config.get('data_sources.bank.expense_flag', '借')   # 支出
-        self.bank_name_column = self.config.get('data_sources.bank.bank_name_column', '银行类型')
-        self.account_column = self.config.get('data_sources.bank.account_column', '本方账号')
+        # 使用utils中的辅助函数获取配置值
+        self.name_column = get_config_value(self.config.config, 'data_sources.bank.name_column', '本方姓名')
+        self.date_column = get_config_value(self.config.config, 'data_sources.bank.date_column', '交易日期')
+        self.amount_column = get_config_value(self.config.config, 'data_sources.bank.amount_column', '交易金额')
+        self.balance_column = get_config_value(self.config.config, 'data_sources.bank.balance_column', '账户余额')
+        self.type_column = get_config_value(self.config.config, 'data_sources.bank.type_column', '交易类型')
+        self.summary_column = get_config_value(self.config.config, 'data_sources.bank.summary_column', '交易摘要')
+        self.remark_column = get_config_value(self.config.config, 'data_sources.bank.remark_column', '交易备注')
+        self.direction_column = get_config_value(self.config.config, 'data_sources.bank.direction_column', '借贷标识')
+        self.opposite_name_column = get_config_value(self.config.config, 'data_sources.bank.opposite_name_column', '对方姓名')
+        self.special_date_column = get_config_value(self.config.config, 'data_sources.bank.special_date_column', '特殊日期名称')
+        self.income_flag = get_config_value(self.config.config, 'data_sources.bank.income_flag', '贷')    # 收入
+        self.expense_flag = get_config_value(self.config.config, 'data_sources.bank.expense_flag', '借')   # 支出
+        self.bank_name_column = get_config_value(self.config.config, 'data_sources.bank.bank_name_column', '银行类型')
+        self.account_column = get_config_value(self.config.config, 'data_sources.bank.account_column', '本方账号')
         
         # 定义必需的列
         self.required_columns = [
@@ -56,36 +60,32 @@ class BankDataModel(BaseDataModel):
         ]
         
         # 存取现关键词（修正配置路径）
-        self.deposit_keywords = self.config.get('data_sources.bank.deposit_keywords', ['存', '现金存', '柜台存', '存款', '现金存入', '存现'])
-        self.withdraw_keywords = self.config.get('data_sources.bank.withdraw_keywords', ['取', '现金取', '柜台取', 'ATM取', '取款', '现金支取', '取现'])
-        self.deposit_exclude_keywords = self.config.get('data_sources.bank.deposit_exclude_keywords', ['转存', '存息', '利息存入'])
-        self.withdraw_exclude_keywords = self.config.get('data_sources.bank.withdraw_exclude_keywords', ['转取', '利息取出', '息取'])
+        self.deposit_keywords = get_config_value(self.config.config, 'data_sources.bank.deposit_keywords', ['存', '现金存', '柜台存', '存款', '现金存入', '存现'])
+        self.withdraw_keywords = get_config_value(self.config.config, 'data_sources.bank.withdraw_keywords', ['取', '现金取', '柜台取', 'ATM取', '取款', '现金支取', '取现'])
+        self.deposit_exclude_keywords = get_config_value(self.config.config, 'data_sources.bank.deposit_exclude_keywords', ['转存', '存息', '利息存入'])
+        self.withdraw_exclude_keywords = get_config_value(self.config.config, 'data_sources.bank.withdraw_exclude_keywords', ['转取', '利息取出', '息取'])
 
         # 增强识别配置
-        self.enable_enhanced_algorithm = self.config.get('analysis.cash.recognition.enable_enhanced_algorithm', True)
-        self.confidence_threshold = self.config.get('analysis.cash.recognition.confidence_threshold', 0.5)
-        self.high_priority_confidence = self.config.get('analysis.cash.recognition.high_priority_confidence', 0.95)
-        self.medium_priority_confidence = self.config.get('analysis.cash.recognition.medium_priority_confidence', 0.8)
-        self.low_priority_confidence = self.config.get('analysis.cash.recognition.low_priority_confidence', 0.6)
-        self.large_amount_threshold = self.config.get('analysis.cash.recognition.large_amount_threshold', 100000)
-        self.small_amount_threshold = self.config.get('analysis.cash.recognition.small_amount_threshold', 10)
-        self.enable_fuzzy_matching = self.config.get('analysis.cash.recognition.enable_fuzzy_matching', True)
-        self.enable_amount_analysis = self.config.get('analysis.cash.recognition.enable_amount_analysis', True)
-        self.enable_time_analysis = self.config.get('analysis.cash.recognition.enable_time_analysis', False)
-        self.common_cash_amounts = self.config.get('analysis.cash.recognition.common_cash_amounts', [100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000, 50000])
-        self.round_amount_modulos = self.config.get('analysis.cash.recognition.round_amount_modulos', [50, 100])
-        self.high_priority_deposit_keywords = self.config.get('analysis.cash.recognition.high_priority_deposit_keywords', ['ATM存现', 'CRS无卡存现', '柜台存现'])
-        self.high_priority_withdraw_keywords = self.config.get('analysis.cash.recognition.high_priority_withdraw_keywords', ['ATM取现', 'CRS无卡取现', '柜台取现'])
+        self.enable_enhanced_algorithm = get_config_value(self.config.config, 'analysis.cash.recognition.enable_enhanced_algorithm', True)
+        self.confidence_threshold = get_config_value(self.config.config, 'analysis.cash.recognition.confidence_threshold', 0.5)
+        self.high_priority_confidence = get_config_value(self.config.config, 'analysis.cash.recognition.high_priority_confidence', 0.95)
+        self.medium_priority_confidence = get_config_value(self.config.config, 'analysis.cash.recognition.medium_priority_confidence', 0.8)
+        self.low_priority_confidence = get_config_value(self.config.config, 'analysis.cash.recognition.low_priority_confidence', 0.6)
+        self.large_amount_threshold = get_config_value(self.config.config, 'analysis.cash.recognition.large_amount_threshold', 100000)
+        self.small_amount_threshold = get_config_value(self.config.config, 'analysis.cash.recognition.small_amount_threshold', 10)
+        self.enable_fuzzy_matching = get_config_value(self.config.config, 'analysis.cash.recognition.enable_fuzzy_matching', True)
+        self.enable_amount_analysis = get_config_value(self.config.config, 'analysis.cash.recognition.enable_amount_analysis', True)
+        self.enable_time_analysis = get_config_value(self.config.config, 'analysis.cash.recognition.enable_time_analysis', False)
+        self.common_cash_amounts = get_config_value(self.config.config, 'analysis.cash.recognition.common_cash_amounts', [100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000, 50000])
+        self.round_amount_modulos = get_config_value(self.config.config, 'analysis.cash.recognition.round_amount_modulos', [50, 100])
+        self.high_priority_deposit_keywords = get_config_value(self.config.config, 'analysis.cash.recognition.high_priority_deposit_keywords', ['ATM存现', 'CRS无卡存现', '柜台存现'])
+        self.high_priority_withdraw_keywords = get_config_value(self.config.config, 'analysis.cash.recognition.high_priority_withdraw_keywords', ['ATM取现', 'CRS无卡取现', '柜台取现'])
 
         # 初始化存取现识别引擎
         self.cash_recognition_engine = CashRecognitionEngine(self.config)
 
         # 调用父类初始化
-        super().__init__(data_path, data)
-    
-    def _safe_to_numeric(self, series):
-        """安全地将Series转换为数值类型，无法转换的填充为0"""
-        return pd.to_numeric(series, errors='coerce').fillna(0)
+        super().__init__(data_path, data, config)
 
     def preprocess(self):
         """
@@ -99,9 +99,9 @@ class BankDataModel(BaseDataModel):
         if debit_col and credit_col and self.amount_column not in self.data.columns:
             self.logger.info(f"检测到 '{debit_col}' 和 '{credit_col}' 列，将它们合并为 '{self.amount_column}' 和 '{self.direction_column}'")
             
-            # 安全地转换为数值类型
-            debit_values = self._safe_to_numeric(self.data[debit_col])
-            credit_values = self._safe_to_numeric(self.data[credit_col])
+            # 使用utils中的辅助函数安全地转换为数值类型
+            debit_values = safe_to_numeric(self.data[debit_col])
+            credit_values = safe_to_numeric(self.data[credit_col])
             
             # 创建 '交易金额' 和 '借贷标识'
             self.data[self.amount_column] = np.where(debit_values != 0, debit_values, credit_values)
@@ -111,30 +111,25 @@ class BankDataModel(BaseDataModel):
             self.data.loc[self.data[self.amount_column] == 0, self.direction_column] = '未知'
             
         # 2. 确保核心列存在且类型正确
-        # 确保日期列为日期类型
+        # 使用utils中的辅助函数确保日期列为日期类型
         if self.date_column in self.data.columns:
-            self.data[self.date_column] = pd.to_datetime(self.data[self.date_column], errors='coerce')
+            self.data[self.date_column] = convert_to_datetime(self.data[self.date_column])
 
-        # 确保金额列为数值类型
+        # 使用utils中的辅助函数确保金额列为数值类型
         if self.amount_column in self.data.columns:
-            self.data[self.amount_column] = self._safe_to_numeric(self.data[self.amount_column])
+            self.data[self.amount_column] = safe_to_numeric(self.data[self.amount_column])
 
-        # 确保账户余额列为数值类型
+        # 使用utils中的辅助函数确保账户余额列为数值类型
         if self.balance_column in self.data.columns:
-            self.data[self.balance_column] = self._safe_to_numeric(self.data[self.balance_column])
+            self.data[self.balance_column] = safe_to_numeric(self.data[self.balance_column])
 
-        # 确保可选字段存在（如果不存在则创建默认值）
-        if self.remark_column not in self.data.columns:
-            self.data[self.remark_column] = ''
-            self.logger.info(f"创建缺失的字段 '{self.remark_column}'")
-
-        if self.summary_column not in self.data.columns:
-            self.data[self.summary_column] = ''
-            self.logger.info(f"创建缺失的字段 '{self.summary_column}'")
-
-        if self.opposite_name_column not in self.data.columns:
-            self.data[self.opposite_name_column] = '未知'
-            self.logger.info(f"创建缺失的字段 '{self.opposite_name_column}'")
+        # 使用utils中的辅助函数确保可选字段存在
+        missing_columns_config = {
+            self.remark_column: '',
+            self.summary_column: '',
+            self.opposite_name_column: '未知'
+        }
+        self.data = add_missing_columns(self.data, missing_columns_config)
         
         # 3. 添加收入和支出列
         self.data['收入金额'] = 0.0
@@ -151,7 +146,8 @@ class BankDataModel(BaseDataModel):
         
         # 7. 添加数据来源列
         if self.file_path and '数据来源' not in self.data.columns:
-            source_name = os.path.splitext(os.path.basename(self.file_path))[0]
+            # 使用utils中的辅助函数提取数据源名称
+            source_name = extract_data_source(self.file_path)
             self.data['数据来源'] = source_name
             self.logger.info(f"已添加 '数据来源' 列，值为 '{source_name}'")
         elif '数据来源' not in self.data.columns:
@@ -455,57 +451,3 @@ class BankDataModel(BaseDataModel):
             存现数据
         """
         return self.get_cash_data(person_name, '存现')
-    
-    def get_withdraw_data(self, person_name: Optional[str] = None) -> pd.DataFrame:
-        """
-        获取取现数据
-        
-        Parameters:
-        -----------
-        person_name : str, optional
-            人名，如果提供则只返回该人的取现数据
-            
-        Returns:
-        --------
-        pd.DataFrame
-            取现数据
-        """
-        return self.get_cash_data(person_name, '取现') 
-
-    def load_data(self, data_path: Optional[str] = None):
-        """
-        加载数据
-        
-        Parameters:
-        -----------
-        data_path : str, optional
-            数据文件路径，如果提供则从文件加载数据
-        """
-        if data_path:
-            self.file_path = data_path
-        
-        try:
-            # 尝试使用多种方式加载，不在这里强制转换类型
-            try:
-                self.data = pd.read_excel(self.file_path)
-            except Exception:
-                try:
-                    self.data = pd.read_excel(self.file_path, engine='openpyxl')
-                except Exception:
-                    self.data = pd.read_csv(self.file_path, encoding='gbk', sep='\t')
-
-            # 添加数据来源列
-            if '数据来源' not in self.data.columns and self.file_path:
-                self.data['数据来源'] = os.path.basename(self.file_path)
-
-            self.logger.info("数据加载完成")
-        except Exception as e:
-            self.logger.error(f"数据加载失败，错误信息：{e}")
-            # 创建一个空的DataFrame，防止后续代码出错
-            self.data = pd.DataFrame()
-            # 可以在这里重新抛出异常，或者让调用者处理空数据
-            raise
-        
-        if not self.data.empty:
-            self.validate()
-            self.preprocess() 

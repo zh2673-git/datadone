@@ -156,8 +156,8 @@ class BankAnalyzer(BaseAnalyzer):
         # 按'本方姓名'和'存取现标识'进行分组
         summary = cash_ops.groupby(['本方姓名', '存取现标识']).agg(
             交易次数=('交易金额', 'count'),
-            总金额=('交易金额', lambda x: x.abs().sum()),
-            平均金额=('交易金额', lambda x: x.abs().mean()),
+            总金额=('交易金额', lambda x: x.abs().sum() if not x.isna().all() else 0),
+            平均金额=('交易金额', lambda x: x.abs().mean() if not x.isna().all() else 0),
             最早交易日=('交易日期', 'min'),
             最晚交易日=('交易日期', 'max')
         ).reset_index()
@@ -314,7 +314,10 @@ class BankAnalyzer(BaseAnalyzer):
 
             # 格式化数值
             if isinstance(value, (int, float)):
-                if metric_key in ['占比', '比例'] or '占比' in metric_key:
+                # 处理NaN值
+                if pd.isna(value):
+                    formatted_value = 'N/A'
+                elif metric_key in ['占比', '比例'] or '占比' in metric_key:
                     formatted_value = f"{value:.1%}"
                 elif isinstance(value, float) and value != int(value):
                     formatted_value = f"{value:.2f}"
@@ -860,7 +863,8 @@ class BankAnalyzer(BaseAnalyzer):
 
         # 计算时间跨度
         time_span = transfer_data.groupby(grouping_keys)['交易日期'].agg(['min', 'max']).reset_index()
-        time_span['交易时间跨度'] = (time_span['max'] - time_span['min']).dt.days + 1
+        # 处理可能的NaN值，避免转换错误
+        time_span['交易时间跨度'] = (time_span['max'] - time_span['min']).dt.days.fillna(0).astype(int) + 1
         
         # 合并结果
         result = pd.merge(grouped, time_span[grouping_keys + ['交易时间跨度']], on=grouping_keys, how='left')
@@ -1031,4 +1035,4 @@ class BankAnalyzer(BaseAnalyzer):
         # 根据存取现类型确定金额列
         amount_col = '收入金额' if cash_type == '存现' else '支出金额'
         
-        return cash_data.nlargest(top_n, amount_col) 
+        return cash_data.nlargest(top_n, amount_col)

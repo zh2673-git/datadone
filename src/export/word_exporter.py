@@ -605,8 +605,18 @@ class WordExporter:
         if cash_df.empty:
             return
 
-        total_amount = cash_df['总金额'].sum()
-        total_count = cash_df['交易次数'].sum()
+        # 检查cash_df是原始交易数据还是聚合数据
+        # 如果是原始交易数据，需要计算总金额和交易次数
+        if '总金额' in cash_df.columns and '交易次数' in cash_df.columns:
+            # 已经是聚合数据
+            total_amount = cash_df['总金额'].sum()
+            total_count = cash_df['交易次数'].sum()
+            person_cash_data = cash_df.copy()
+        else:
+            # 是原始交易数据，需要聚合计算
+            total_amount = cash_df[bank_model.amount_column].sum()
+            total_count = len(cash_df)
+            person_cash_data = cash_df.copy()
         
         p = doc.add_paragraph()
         p.add_run(f"{section_num}、{cash_type}概览").bold = True
@@ -618,12 +628,6 @@ class WordExporter:
             if total_amount >= 1_000_000:
                 amount_run.underline = True
         p.add_run("。")
-        
-        # 查找相关的原始交易数据
-        person_cash_data = bank_model.data[
-            (bank_model.data[bank_model.name_column] == person_name) & 
-            (bank_model.data['存取现标识'] == cash_type)
-        ].copy()
 
         if person_cash_data.empty:
             return

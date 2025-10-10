@@ -143,7 +143,7 @@ class PaymentAnalyzer(BaseAnalyzer):
 
         # 获取相关列名
         name_col = self.payment_model.name_column
-        opposite_name_col = self.payment_model.opposite_column
+        opposite_name_col = self.payment_model.opposite_name_column
         date_col = self.payment_model.date_column
         
         # 定义分组键和聚合操作
@@ -205,6 +205,9 @@ class PaymentAnalyzer(BaseAnalyzer):
         years = df[date_col].dt.year.dropna().unique()
         holiday_map = {}
         for year_float in years:
+            # 检查是否为NaN值，避免转换错误
+            if pd.isna(year_float):
+                continue
             year = int(year_float)
             for name, details in special_dates_config.items():
                 try:

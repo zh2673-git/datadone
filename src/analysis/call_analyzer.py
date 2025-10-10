@@ -114,7 +114,7 @@ class CallAnalyzer(BaseAnalyzer):
 
         # 获取相关列名
         name_col = self.call_model.name_column
-        opposite_number_col = self.call_model.opposite_column
+        opposite_number_col = self.call_model.opposite_phone_column
         opposite_name_col = self.call_model.opposite_name_column
         opposite_company_col = self.call_model.opposite_unit_column
         opposite_position_col = self.call_model.opposite_title_column

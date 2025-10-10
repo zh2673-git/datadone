@@ -201,13 +201,34 @@ class BankAnalyzer(BaseAnalyzer):
             return pd.DataFrame()
 
         date_col = self.bank_model.date_column
+        df = data.copy()
+        df[date_col] = pd.to_datetime(df[date_col])
         
-        # 过滤出特殊日期的交易
-        special_dates_data = data.copy()
+        # 预计算所有年份的节假日公历日期
+        years = df[date_col].dt.year.dropna().unique()
+        holiday_map = {}
+        for year_float in years:
+            # 检查是否为NaN值，避免转换错误
+            if pd.isna(year_float):
+                continue
+            year = int(year_float)
+            for name, details in special_dates_config.items():
+                try:
+                    if details['type'] == 'lunar':
+                        holiday_date = ZhDate(year, details['month'], details['day']).to_datetime().date()
+                    else: # solar
+                        holiday_date = datetime(year, details['month'], details['day']).date()
+                    holiday_map[holiday_date] = name
+                except (ValueError, TypeError) as e:
+                    self.logger.warning(f"无法计算日期 '{name}' 在 {year} 年: {e}")
+                    continue
         
-        # 这里实现特殊日期检测逻辑
-        # 暂时返回空DataFrame，后续可以完善
-        return pd.DataFrame()
+        df['normalized_date'] = df[date_col].dt.date
+        df['特殊日期名称'] = df['normalized_date'].map(holiday_map)
+        
+        special_transactions = df.dropna(subset=['特殊日期名称']).copy()
+
+        return special_transactions
 
     def analyze_special_amounts(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -221,18 +242,21 @@ class BankAnalyzer(BaseAnalyzer):
         Returns:
         --------
         pd.DataFrame
-            特殊金额分析结果
+            特殊金额交易分析结果
         """
-        if data.empty:
+        special_amounts_config = self.config.get('analysis', {}).get('special_amount', {}).get('amounts', [])
+        if not special_amounts_config or data.empty:
             return pd.DataFrame()
 
-        # 这里实现特殊金额检测逻辑
-        # 暂时返回空DataFrame，后续可以完善
-        return pd.DataFrame()
+        amount_col = self.bank_model.amount_column
+        
+        special_transactions = data[data[amount_col].abs().isin(special_amounts_config)].copy()
+        
+        return special_transactions
 
     def analyze_integer_amounts(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        分析整数金额的交易
+        分析整百数金额的交易
 
         Parameters:
         -----------
@@ -242,14 +266,21 @@ class BankAnalyzer(BaseAnalyzer):
         Returns:
         --------
         pd.DataFrame
-            整数金额分析结果
+            整百数金额交易分析结果
         """
+        integer_config = self.config.get('analysis', {}).get('integer_amount', {})
+        threshold = integer_config.get('bank_threshold', 1000)
+
         if data.empty:
             return pd.DataFrame()
 
-        # 这里实现整数金额检测逻辑
-        # 暂时返回空DataFrame，后续可以完善
-        return pd.DataFrame()
+        amount_col = self.bank_model.amount_column
+
+        # 筛选出大于等于阈值的整百数金额交易（能被100整除）
+        integer_mask = (data[amount_col].abs() >= threshold) & (data[amount_col].abs() % 100 == 0)
+        integer_transactions = data[integer_mask].copy()
+
+        return integer_transactions
 
     def analyze_cash_operations(self, data: pd.DataFrame) -> pd.DataFrame:
         """

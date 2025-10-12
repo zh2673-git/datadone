@@ -198,7 +198,7 @@ class ExcelExporter(BaseExporter):
                     self.logger.info("正在生成平台原始数据表...")
                     self.export_platform_raw_data(writer, data_models, analysis_results)
 
-                # 5. 高级分析表（最后一个表格）
+                # 5. 高级分析表
                 if advanced_analysis_dfs:
                     combined_advanced_df = pd.concat(advanced_analysis_dfs, ignore_index=True)
                     # 重新排列列的顺序，将数据来源放在前面
@@ -211,7 +211,18 @@ class ExcelExporter(BaseExporter):
                     self._set_column_widths(worksheet, combined_advanced_df)
                     self._format_sheet(worksheet, combined_advanced_df, writer.book)
 
-                # 注意：按照用户要求，高级分析之后的所有表格都不再生成
+                # 6. 大额资金追踪表（新增功能）
+                if data_models:
+                    self.logger.info("正在生成大额资金追踪表...")
+                    fund_tracking_df = self._generate_fund_tracking_sheet(data_models)
+                    if not fund_tracking_df.empty:
+                        fund_tracking_df.to_excel(writer, sheet_name='大额资金跟踪', index=False)
+                        worksheet = writer.sheets['大额资金跟踪']
+                        self._set_column_widths(worksheet, fund_tracking_df)
+                        self._format_sheet(worksheet, fund_tracking_df, writer.book)
+                        self.logger.info("已添加大额资金追踪表")
+
+                # 注意：按照用户要求，大额资金追踪表之后的所有表格都不再生成
                 # 包括：其他分析结果、重点收支数据表等
 
                 self.logger.info(f"已按指定顺序生成核心分析表格，共 {len(analysis_results)} 个分析结果")
@@ -1840,6 +1851,56 @@ class ExcelExporter(BaseExporter):
             'value': 0,
             'format': neg_format
         })
+
+    def _generate_fund_tracking_sheet(self, data_models: Dict) -> pd.DataFrame:
+        """
+        生成大额资金追踪表
+        
+        Args:
+            data_models: 数据模型字典，格式为 {'bank': bank_model, 'wechat': wechat_model, ...}
+            
+        Returns:
+            pd.DataFrame: 大额资金追踪结果
+        """
+        try:
+            # 导入大额资金追踪引擎
+            from ..utils.fund_tracking import FundTrackingEngine
+            
+            # 初始化追踪引擎
+            tracking_engine = FundTrackingEngine()
+            
+            # 执行大额资金追踪
+            tracking_results = tracking_engine.track_large_funds(data_models)
+            
+            if tracking_results.empty:
+                self.logger.info("未发现大额资金交易")
+                return pd.DataFrame()
+            
+            # 格式化追踪结果
+            formatted_results = []
+            for idx, result in tracking_results.iterrows():
+                formatted_result = {
+                    '追踪ID': f"TRK{idx:04d}",  # 生成追踪ID
+                    '核心人员': result.get('核心人员', result.get('core_person', '')),
+                    '交易日期': result.get('交易日期', ''),
+                    '交易金额': result.get('交易金额', 0),
+                    '交易方向': result.get('交易方向', ''),
+                    '对方人员': result.get('关联人员', result.get('对方姓名', '')),
+                    '数据来源': result.get('数据来源', ''),
+                    '大额级别': result.get('大额级别', ''),
+                    '追踪深度': result.get('追踪层级', result.get('tracking_depth', 0)),
+                    '备注': result.get('追踪说明', result.get('notes', ''))
+                }
+                formatted_results.append(formatted_result)
+            
+            return pd.DataFrame(formatted_results)
+            
+        except ImportError:
+            self.logger.warning("大额资金追踪模块未找到，跳过生成大额资金追踪表")
+            return pd.DataFrame()
+        except Exception as e:
+            self.logger.error(f"生成大额资金追踪表时出错: {e}")
+            return pd.DataFrame()
     
     # Obsolete functions removed.
     # The methods get_output_path, export_all_to_excel, export_raw_data,

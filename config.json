@@ -1079,7 +1079,10 @@
         "log_level": "INFO",
         "log_file": "logs/app.log",
         "config_auto_reload": true,
-        "config_reload_interval": 60
+        "config_reload_interval": 60,
+        "cache_enabled": true,
+        "cache_timeout": 3600,
+        "cache_dir": "cache"
     },
     "output": {
         "excel": {

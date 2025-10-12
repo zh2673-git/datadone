@@ -1,0 +1,515 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Tuple, Optional, Set
+import logging
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+from src.utils.config import Config
+from src.utils.key_transactions import KeyTransactionEngine
+
+
+class FundTrackingEngine:
+    """
+    大额资金追踪引擎
+    
+    功能：
+    1. 以人名为单位，筛选出大额资金
+    2. 追踪大额资金的来源和去向
+    3. 支持跨人员资金流向追踪
+    """
+    
+    def __init__(self, config: Optional[Config] = None):
+        """
+        初始化大额资金追踪引擎
+        
+        Parameters:
+        -----------
+        config : Config, optional
+            配置对象，如果不提供则使用默认配置
+        """
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.config = config or Config()
+        
+        # 获取大额资金阈值配置
+        self.large_amount_thresholds = self.config.get(
+            'analysis.key_transactions.large_amount_thresholds',
+            {
+                "level1": {"min": 100000, "max": 500000, "name": "10万-50万"},
+                "level2": {"min": 500000, "max": 1000000, "name": "50万-100万"},
+                "level3": {"min": 1000000, "max": 999999999, "name": "100万及以上"}
+            }
+        )
+        
+        # 最小大额资金阈值（用于筛选大额交易）
+        self.min_large_amount = min(
+            level_config["min"] 
+            for level_config in self.large_amount_thresholds.values()
+        )
+        
+        # 追踪时间窗口（天）
+        self.tracking_window_days = self.config.get(
+            'analysis.fund_tracking.tracking_window_days', 30
+        )
+        
+        # 最大追踪深度
+        self.max_tracking_depth = self.config.get(
+            'analysis.fund_tracking.max_tracking_depth', 3
+        )
+        
+        self.logger.info(f"大额资金追踪引擎初始化完成，最小大额阈值: {self.min_large_amount}")
+    
+    def track_large_funds(self, data_models: Dict[str, object]) -> pd.DataFrame:
+        """
+        追踪所有数据模型中的大额资金流向
+        
+        Parameters:
+        -----------
+        data_models : Dict[str, object]
+            包含各种数据模型的字典，如 {'bank': bank_model, 'wechat': wechat_model, ...}
+            
+        Returns:
+        --------
+        pd.DataFrame
+            大额资金追踪结果，包含资金流向信息
+        """
+        if not data_models:
+            self.logger.warning("未提供数据模型，无法进行大额资金追踪")
+            return pd.DataFrame()
+        
+        # 收集所有大额交易
+        all_large_transactions = []
+        
+        for model_name, model in data_models.items():
+            if model is None or model.data.empty:
+                continue
+                
+            # 检查模型是否支持大额资金追踪（需要有金额列）
+            if not hasattr(model, 'amount_column'):
+                self.logger.debug(f"跳过 {model_name} 数据模型，不支持大额资金追踪")
+                continue
+                
+            # 根据模型类型获取相应的列名
+            if hasattr(model, 'name_column'):
+                name_col = model.name_column
+                amount_col = model.amount_column
+                date_col = model.date_column
+                
+                if hasattr(model, 'opposite_name_column'):
+                    opposite_name_col = model.opposite_name_column
+                else:
+                    opposite_name_col = None
+                
+                # 筛选大额交易
+                large_transactions = self._extract_large_transactions(
+                    model.data, name_col, amount_col, date_col, opposite_name_col, model_name
+                )
+                
+                if not large_transactions.empty:
+                    all_large_transactions.append(large_transactions)
+        
+        if not all_large_transactions:
+            self.logger.info("未发现大额交易")
+            return pd.DataFrame()
+        
+        # 合并所有大额交易
+        combined_transactions = pd.concat(all_large_transactions, ignore_index=True)
+        
+        # 按时间排序
+        combined_transactions = combined_transactions.sort_values('交易日期')
+        
+        # 构建资金流向追踪结果
+        tracking_results = self._build_fund_flow_tracking(combined_transactions, data_models)
+        
+        return tracking_results
+    
+    def _extract_large_transactions(self, data: pd.DataFrame, name_col: str, 
+                                   amount_col: str, date_col: str, 
+                                   opposite_name_col: Optional[str], 
+                                   data_source: str) -> pd.DataFrame:
+        """
+        从数据中提取大额交易
+        
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            原始数据
+        name_col : str
+            人名列名
+        amount_col : str
+            金额列名
+        date_col : str
+            日期列名
+        opposite_name_col : str, optional
+            对方人名列名
+        data_source : str
+            数据源名称
+            
+        Returns:
+        --------
+        pd.DataFrame
+            大额交易数据
+        """
+        if data.empty:
+            return pd.DataFrame()
+        
+        # 确保金额列是数值类型
+        if amount_col not in data.columns:
+            self.logger.warning(f"数据中缺少金额列: {amount_col}")
+            return pd.DataFrame()
+        
+        # 转换金额为数值类型
+        data[amount_col] = pd.to_numeric(data[amount_col], errors='coerce')
+        
+        # 筛选大额交易（绝对值大于最小阈值）
+        large_mask = data[amount_col].abs() >= self.min_large_amount
+        large_data = data[large_mask].copy()
+        
+        if large_data.empty:
+            return pd.DataFrame()
+        
+        # 构建大额交易结果
+        result_data = []
+        
+        for _, row in large_data.iterrows():
+            amount = row[amount_col]
+            person_name = row[name_col] if name_col in row else '未知'
+            
+            # 确定交易方向
+            if amount > 0:
+                direction = '收入'
+                opposite_person = row[opposite_name_col] if opposite_name_col and opposite_name_col in row else '未知'
+            else:
+                direction = '支出'
+                opposite_person = row[opposite_name_col] if opposite_name_col and opposite_name_col in row else '未知'
+            
+            # 确定大额级别
+            amount_level = self._get_amount_level(abs(amount))
+            
+            result_data.append({
+                '数据来源': data_source,
+                '交易日期': row[date_col] if date_col in row else '未知',
+                '本方姓名': person_name,
+                '对方姓名': opposite_person,
+                '交易金额': amount,
+                '交易方向': direction,
+                '大额级别': amount_level,
+                '原始数据索引': _
+            })
+        
+        return pd.DataFrame(result_data)
+    
+    def _get_amount_level(self, amount: float) -> str:
+        """
+        根据金额确定大额级别
+        
+        Parameters:
+        -----------
+        amount : float
+            交易金额
+            
+        Returns:
+        --------
+        str
+            大额级别名称
+        """
+        for level_key, level_config in self.large_amount_thresholds.items():
+            min_amount = level_config["min"]
+            max_amount = level_config["max"]
+            
+            if min_amount <= amount < max_amount:
+                return level_config["name"]
+        
+        return "未知级别"
+    
+    def _build_fund_flow_tracking(self, transactions: pd.DataFrame, 
+                                 data_models: Dict[str, object]) -> pd.DataFrame:
+        """
+        构建资金流向追踪结果
+        
+        Parameters:
+        -----------
+        transactions : pd.DataFrame
+            所有大额交易数据
+        data_models : Dict[str, object]
+            数据模型字典
+            
+        Returns:
+        --------
+        pd.DataFrame
+            资金流向追踪结果
+        """
+        if transactions.empty:
+            return pd.DataFrame()
+        
+        tracking_results = []
+        
+        # 按本方姓名分组，追踪每个人的大额资金流向
+        for person_name in transactions['本方姓名'].unique():
+            person_transactions = transactions[transactions['本方姓名'] == person_name]
+            
+            # 追踪该人员的大额资金流向
+            person_tracking = self._track_person_funds(person_name, person_transactions, data_models)
+            
+            if not person_tracking.empty:
+                tracking_results.append(person_tracking)
+        
+        if tracking_results:
+            return pd.concat(tracking_results, ignore_index=True)
+        else:
+            return pd.DataFrame()
+    
+    def _track_person_funds(self, person_name: str, person_transactions: pd.DataFrame,
+                           data_models: Dict[str, object], current_depth: int = 0,
+                           visited_persons: Optional[Set[str]] = None) -> pd.DataFrame:
+        """
+        追踪单个人员的大额资金流向
+        
+        Parameters:
+        -----------
+        person_name : str
+            人员姓名
+        person_transactions : pd.DataFrame
+            该人员的大额交易
+        data_models : Dict[str, object]
+            数据模型字典
+        current_depth : int
+            当前追踪深度
+        visited_persons : Set[str], optional
+            已访问的人员集合，用于避免循环追踪
+            
+        Returns:
+        --------
+        pd.DataFrame
+            该人员的资金流向追踪结果
+        """
+        if visited_persons is None:
+            visited_persons = set()
+        
+        # 避免循环追踪
+        if person_name in visited_persons or current_depth >= self.max_tracking_depth:
+            return pd.DataFrame()
+        
+        visited_persons.add(person_name)
+        
+        tracking_results = []
+        
+        for _, transaction in person_transactions.iterrows():
+            tracking_result = self._track_single_transaction(transaction, data_models, 
+                                                           current_depth, visited_persons.copy())
+            
+            if tracking_result:
+                tracking_results.extend(tracking_result)
+        
+        if tracking_results:
+            return pd.DataFrame(tracking_results)
+        else:
+            return pd.DataFrame()
+    
+    def _track_single_transaction(self, transaction: pd.Series, 
+                                 data_models: Dict[str, object],
+                                 current_depth: int, 
+                                 visited_persons: Set[str]) -> List[Dict]:
+        """
+        追踪单笔大额交易的资金流向
+        
+        Parameters:
+        -----------
+        transaction : pd.Series
+            单笔大额交易
+        data_models : Dict[str, object]
+            数据模型字典
+        current_depth : int
+            当前追踪深度
+        visited_persons : Set[str]
+            已访问的人员集合
+            
+        Returns:
+        --------
+        List[Dict]
+            资金流向追踪结果列表
+        """
+        tracking_results = []
+        
+        # 添加当前交易信息
+        tracking_results.append({
+            '追踪层级': current_depth,
+            '核心人员': transaction['本方姓名'],
+            '关联人员': transaction['对方姓名'],
+            '交易日期': transaction['交易日期'],
+            '交易金额': transaction['交易金额'],
+            '交易方向': transaction['交易方向'],
+            '大额级别': transaction['大额级别'],
+            '数据来源': transaction['数据来源'],
+            '资金流向': '直接交易',
+            '追踪说明': f"{transaction['本方姓名']} {transaction['交易方向']} {abs(transaction['交易金额']):,.0f}元给{transaction['对方姓名']}"
+        })
+        
+        # 如果当前交易是支出，追踪资金的去向
+        if transaction['交易方向'] == '支出':
+            opposite_person = transaction['对方姓名']
+            
+            # 在时间窗口内追踪对方人员的相关交易
+            transaction_date = pd.to_datetime(transaction['交易日期'])
+            start_date = transaction_date - timedelta(days=self.tracking_window_days)
+            end_date = transaction_date + timedelta(days=self.tracking_window_days)
+            
+            # 在所有数据模型中查找对方人员的相关交易
+            opposite_transactions = self._find_related_transactions(
+                opposite_person, start_date, end_date, data_models, visited_persons
+            )
+            
+            if not opposite_transactions.empty:
+                # 递归追踪对方人员的资金流向
+                next_depth = current_depth + 1
+                opposite_tracking = self._track_person_funds(
+                    opposite_person, opposite_transactions, data_models, 
+                    next_depth, visited_persons
+                )
+                
+                if not opposite_tracking.empty:
+                    # 添加间接追踪结果
+                    for _, opposite_tx in opposite_tracking.iterrows():
+                        tracking_results.append({
+                            '追踪层级': opposite_tx['追踪层级'],
+                            '核心人员': transaction['本方姓名'],
+                            '关联人员': opposite_tx['关联人员'],
+                            '交易日期': opposite_tx['交易日期'],
+                            '交易金额': opposite_tx['交易金额'],
+                            '交易方向': opposite_tx['交易方向'],
+                            '大额级别': opposite_tx['大额级别'],
+                            '数据来源': opposite_tx['数据来源'],
+                            '资金流向': '间接追踪',
+                            '追踪说明': f"通过{opposite_person}间接追踪：{opposite_tx['追踪说明']}"
+                        })
+        
+        return tracking_results
+    
+    def _find_related_transactions(self, person_name: str, start_date: datetime,
+                                  end_date: datetime, data_models: Dict[str, object],
+                                  visited_persons: Set[str]) -> pd.DataFrame:
+        """
+        查找指定人员在时间窗口内的相关交易
+        
+        Parameters:
+        -----------
+        person_name : str
+            人员姓名
+        start_date : datetime
+            开始日期
+        end_date : datetime
+            结束日期
+        data_models : Dict[str, object]
+            数据模型字典
+        visited_persons : Set[str]
+            已访问的人员集合
+            
+        Returns:
+        --------
+        pd.DataFrame
+            相关交易数据
+        """
+        related_transactions = []
+        
+        for model_name, model in data_models.items():
+            if model is None or model.data.empty:
+                continue
+            
+            if hasattr(model, 'name_column') and hasattr(model, 'date_column') and hasattr(model, 'amount_column'):
+                name_col = model.name_column
+                date_col = model.date_column
+                amount_col = model.amount_column
+                
+                # 筛选该人员的交易
+                person_data = model.data[model.data[name_col] == person_name].copy()
+                
+                if person_data.empty:
+                    continue
+                
+                # 转换日期列
+                person_data[date_col] = pd.to_datetime(person_data[date_col], errors='coerce')
+                
+                # 筛选时间窗口内的交易
+                time_mask = (person_data[date_col] >= start_date) & (person_data[date_col] <= end_date)
+                time_filtered_data = person_data[time_mask]
+                
+                if time_filtered_data.empty:
+                    continue
+                
+                # 筛选大额交易
+                time_filtered_data[amount_col] = pd.to_numeric(time_filtered_data[amount_col], errors='coerce')
+                large_mask = time_filtered_data[amount_col].abs() >= self.min_large_amount
+                large_data = time_filtered_data[large_mask]
+                
+                if large_data.empty:
+                    continue
+                
+                # 构建交易记录
+                for _, row in large_data.iterrows():
+                    amount = row[amount_col]
+                    direction = '收入' if amount > 0 else '支出'
+                    
+                    if hasattr(model, 'opposite_name_column'):
+                        opposite_name_col = model.opposite_name_column
+                        opposite_person = row[opposite_name_col] if opposite_name_col in row else '未知'
+                    else:
+                        opposite_person = '未知'
+                    
+                    # 避免追踪已访问的人员（除了直接交易对方）
+                    if opposite_person in visited_persons and opposite_person != person_name:
+                        continue
+                    
+                    amount_level = self._get_amount_level(abs(amount))
+                    
+                    related_transactions.append({
+                        '数据来源': model_name,
+                        '交易日期': row[date_col],
+                        '本方姓名': person_name,
+                        '对方姓名': opposite_person,
+                        '交易金额': amount,
+                        '交易方向': direction,
+                        '大额级别': amount_level
+                    })
+        
+        if related_transactions:
+            return pd.DataFrame(related_transactions)
+        else:
+            return pd.DataFrame()
+    
+    def generate_tracking_report(self, tracking_results: pd.DataFrame) -> Dict:
+        """
+        生成大额资金追踪报告
+        
+        Parameters:
+        -----------
+        tracking_results : pd.DataFrame
+            资金流向追踪结果
+            
+        Returns:
+        --------
+        Dict
+            追踪报告统计信息
+        """
+        if tracking_results.empty:
+            return {
+                '总追踪交易数': 0,
+                '涉及人员数': 0,
+                '最大追踪深度': 0,
+                '大额级别分布': {},
+                '数据来源分布': {},
+                '资金流向统计': {}
+            }
+        
+        report = {
+            '总追踪交易数': len(tracking_results),
+            '涉及人员数': tracking_results['核心人员'].nunique(),
+            '最大追踪深度': tracking_results['追踪层级'].max(),
+            '大额级别分布': tracking_results['大额级别'].value_counts().to_dict(),
+            '数据来源分布': tracking_results['数据来源'].value_counts().to_dict(),
+            '资金流向统计': tracking_results['资金流向'].value_counts().to_dict()
+        }
+        
+        return report

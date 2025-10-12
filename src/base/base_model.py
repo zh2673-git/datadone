@@ -39,6 +39,8 @@ class BaseDataModel(ABC):
             self.logger.info(f"BaseDataModel - 加载数据后的列名: {self.data.columns.tolist()}")
             self.logger.info(f"BaseDataModel - 必需的列: {self.required_columns}")
             self.validate()
+            # 在预处理前先进行去重
+            self.remove_duplicates()
             self.preprocess()
     
     def get_data_sources(self) -> List[str]:
@@ -93,6 +95,50 @@ class BaseDataModel(ABC):
         
         self.logger.info("数据验证通过")
         return True
+    
+    def remove_duplicates(self, subset=None, keep='first'):
+        """
+        去除重复数据
+        
+        Parameters:
+        -----------
+        subset : list, optional
+            用于判断重复的列名列表，如果为None则使用所有列
+        keep : str, optional
+            保留策略：'first'保留第一个，'last'保留最后一个，False删除所有重复项
+            
+        Returns:
+        --------
+        int
+            删除的重复行数
+        """
+        if self.data.empty:
+            self.logger.warning("数据为空，无法去重")
+            return 0
+            
+        original_count = len(self.data)
+        
+        # 如果没有指定列，使用所有列进行去重
+        if subset is None:
+            subset = self.data.columns.tolist()
+        
+        # 检查指定的列是否存在
+        missing_columns = [col for col in subset if col not in self.data.columns]
+        if missing_columns:
+            self.logger.warning(f"去重列不存在: {missing_columns}")
+            return 0
+        
+        # 执行去重
+        self.data = self.data.drop_duplicates(subset=subset, keep=keep)
+        
+        removed_count = original_count - len(self.data)
+        
+        if removed_count > 0:
+            self.logger.info(f"去重完成，删除了 {removed_count} 行重复数据")
+        else:
+            self.logger.info("未发现重复数据")
+            
+        return removed_count
     
     @abstractmethod
     def preprocess(self):
@@ -209,4 +255,4 @@ class BaseDataModel(ABC):
         """
         返回数据描述
         """
-        return f"{self.__class__.__name__}: {len(self.data)} 行, {len(self.data.columns)} 列" 
+        return f"{self.__class__.__name__}: {len(self.data)} 行, {len(self.data.columns)} 列"

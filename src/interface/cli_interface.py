@@ -18,6 +18,7 @@ from .base_interface import BaseInterface
 from .cli_interface_group import *
 from .cli_interface_export import *
 from src.utils.config import Config
+from src.utils.cache_manager import DataCacheManager
 
 class CommandLineInterface(BaseInterface):
     """
@@ -55,6 +56,9 @@ class CommandLineInterface(BaseInterface):
         self.excel_exporter = ExcelExporter(config=self.config)
         self.word_exporter = WordExporter(config=self.config)
         self.logger = logging.getLogger('main')
+        
+        # 初始化缓存管理器
+        self.cache_manager = DataCacheManager(config=self.config)
         
         # 如果启用了热重载，则启动监控
         if self.config.get('app', {}).get('config_auto_reload', False):
@@ -102,12 +106,13 @@ class CommandLineInterface(BaseInterface):
             "加载数据",
             "执行分析",
             "导出已有分析结果",
+            "缓存管理",
             "退出系统"
         ]
         
         choice = self.display_menu(options, "主菜单")
         
-        if choice == 3:  # 退出系统
+        if choice == 4:  # 退出系统
             return -1
         
         return choice
@@ -125,24 +130,80 @@ class CommandLineInterface(BaseInterface):
             0: self.load_data,
             1: self.run_analysis_menu,
             2: self.export_results_menu,
+            3: self.cache_management_menu,
         }
         action = menu_actions.get(choice)
         if action:
             action()
     
-    def load_data(self):
+    def load_data(self, use_cache: bool = True):
         """
         加载数据
         自动加载data文件夹下的所有表格数据
+        
+        Parameters:
+        -----------
+        use_cache : bool, optional
+            是否使用缓存，默认为True
         """
         print("\n=> 步骤 1: 加载数据")
         print("-" * 20)
         
+        # 尝试从缓存加载
+        if use_cache:
+            cached_data = self.cache_manager.load_data_models()
+            if cached_data is not None:
+                self.data_models = cached_data
+                self.display_success("从缓存加载数据成功")
+                
+                # 数据加载后，重新初始化分析器
+                self._initialize_analyzers()
+                return
+        
+        # 缓存不可用，重新加载数据
         self.auto_load_all_data()
+        
+        # 保存到缓存
+        if use_cache:
+            self.cache_manager.save_data_models(self.data_models)
         
         # 数据加载后，重新初始化分析器
         self._initialize_analyzers()
         self.display_success("数据加载和预处理完成")
+    
+    def cache_management_menu(self):
+        """
+        缓存管理菜单
+        """
+        print("\n=> 缓存管理")
+        print("-" * 20)
+        
+        # 显示缓存信息
+        cache_info = self.cache_manager.get_cache_info()
+        print(f"缓存目录: {cache_info['cache_dir']}")
+        print(f"缓存文件存在: {'是' if cache_info['data_cache_exists'] else '否'}")
+        print(f"缓存有效: {'是' if cache_info['cache_valid'] else '否'}")
+        
+        if cache_info['data_cache_exists']:
+            print(f"缓存大小: {cache_info.get('cache_size', 0)} 字节")
+            print(f"缓存修改时间: {cache_info.get('cache_mtime', '未知')}")
+        
+        options = [
+            "重新加载数据（不使用缓存）",
+            "清除缓存",
+            "返回主菜单"
+        ]
+        
+        choice = self.display_menu(options, "缓存管理")
+        
+        if choice == 0:  # 重新加载数据（不使用缓存）
+            self.load_data(use_cache=False)
+        elif choice == 1:  # 清除缓存
+            if self.cache_manager.clear_cache():
+                self.display_success("缓存已清除")
+            else:
+                self.display_error("清除缓存失败")
+        # choice == 2: 返回主菜单，无需处理
     
     def auto_load_all_data(self):
         """
@@ -599,4 +660,4 @@ class CommandLineInterface(BaseInterface):
         """
         Run the command line interface.
         """
-        self.start() 
+        self.start()

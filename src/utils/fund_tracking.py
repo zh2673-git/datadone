@@ -161,8 +161,8 @@ class FundTrackingEngine:
             self.logger.warning(f"数据中缺少金额列: {amount_col}")
             return pd.DataFrame()
         
-        # 转换金额为数值类型
-        data[amount_col] = pd.to_numeric(data[amount_col], errors='coerce')
+        # 转换金额为数值类型 - 使用.loc避免SettingWithCopyWarning
+        data.loc[:, amount_col] = pd.to_numeric(data[amount_col], errors='coerce')
         
         # 筛选大额交易（绝对值大于最小阈值）
         large_mask = data[amount_col].abs() >= self.min_large_amount
@@ -430,17 +430,17 @@ class FundTrackingEngine:
                     continue
                 
                 # 转换日期列
-                person_data[date_col] = pd.to_datetime(person_data[date_col], errors='coerce')
+                person_data.loc[:, date_col] = pd.to_datetime(person_data[date_col], errors='coerce')
                 
                 # 筛选时间窗口内的交易
                 time_mask = (person_data[date_col] >= start_date) & (person_data[date_col] <= end_date)
-                time_filtered_data = person_data[time_mask]
+                time_filtered_data = person_data[time_mask].copy()
                 
                 if time_filtered_data.empty:
                     continue
                 
-                # 筛选大额交易
-                time_filtered_data[amount_col] = pd.to_numeric(time_filtered_data[amount_col], errors='coerce')
+                # 筛选大额交易 - 使用.loc避免SettingWithCopyWarning
+                time_filtered_data.loc[:, amount_col] = pd.to_numeric(time_filtered_data[amount_col], errors='coerce')
                 large_mask = time_filtered_data[amount_col].abs() >= self.min_large_amount
                 large_data = time_filtered_data[large_mask]
                 

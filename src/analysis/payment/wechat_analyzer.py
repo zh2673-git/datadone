@@ -106,10 +106,19 @@ class WeChatAnalyzer(PaymentAnalyzer):
             # 计算互动统计
             account_stats['互动总次数'] = account_stats['收入次数'] + account_stats['支出次数']
             account_stats['互动金额'] = account_stats['收入总额'] + account_stats['支出总额']
-            account_stats['互动时间跨度(天)'] = (
-                account_stats['最近互动时间'] - account_stats['首次互动时间']
-            ).dt.days + 1
+            
+            # 安全地计算互动时间跨度，避免非日期类型数据
+            time_diff = account_stats['最近互动时间'] - account_stats['首次互动时间']
+            # 检查时间差是否具有.dt访问器，并且所有元素都是Timedelta类型
+            if hasattr(time_diff, 'dt') and all(isinstance(x, pd.Timedelta) for x in time_diff):
+                account_stats['互动时间跨度(天)'] = time_diff.dt.days + 1
+            else:
+                # 如果无法使用.dt访问器，尝试直接计算天数
+                try:
+                    account_stats['互动时间跨度(天)'] = time_diff.apply(lambda x: x.days + 1 if hasattr(x, 'days') else 0)
+                except:
+                    account_stats['互动时间跨度(天)'] = 0
             
             results[f"{source}_微信账号互动"] = account_stats.sort_values('互动总次数', ascending=False)
         
-        return results 
+        return results

@@ -639,7 +639,10 @@ class WordExporter:
 
         # 计算主要时间集中
         person_data = person_data.copy()
-        person_data['年份月份'] = person_data[data_model.date_column].dt.strftime('%Y年%m月')
+        # 安全地格式化日期，避免非日期类型数据
+        person_data['年份月份'] = person_data[data_model.date_column].apply(
+            lambda x: x.strftime('%Y年%m月') if hasattr(x, 'strftime') else '未知日期'
+        )
         monthly_counts = person_data.groupby('年份月份').size().reset_index(name='次数')
         top_months = monthly_counts.nlargest(3, '次数')
         major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
@@ -731,7 +734,10 @@ class WordExporter:
         # 仅对"存现"进行详细分析和生成表格
         if cash_type == '存现':
             # 计算主要时间集中
-            person_cash_data['年份月份'] = person_cash_data[bank_model.date_column].dt.strftime('%Y年%m月')
+            # 安全地格式化日期，避免非日期类型数据
+            person_cash_data['年份月份'] = person_cash_data[bank_model.date_column].apply(
+                lambda x: x.strftime('%Y年%m月') if hasattr(x, 'strftime') else '未知日期'
+            )
             monthly_counts = person_cash_data.groupby('年份月份').size().reset_index(name='次数')
             top_months = monthly_counts.nlargest(3, '次数')
             major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])

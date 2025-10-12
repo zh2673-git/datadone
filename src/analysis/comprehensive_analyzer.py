@@ -347,7 +347,10 @@ class ComprehensiveAnalyzer:
 
         # 计算匹配到的数据源数量
         for col in ['银行总金额', '微信总金额', '支付宝总金额', '通话次数']:
-            merged_df[f'{col}_exists'] = merged_df[col].notna().astype(int)
+            # 安全地转换为整数，处理NaN值
+            exists_series = merged_df[col].notna()
+            # 使用fillna(0)确保没有NaN值，然后转换为整数
+            merged_df[f'{col}_exists'] = exists_series.fillna(False).astype(int)
 
         # 计算总匹配数
         merged_df['match_count'] = merged_df[[f'{col}_exists' for col in [

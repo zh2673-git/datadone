@@ -314,11 +314,15 @@ class BankAnalyzer(BaseAnalyzer):
 
             # 格式化数值
             if isinstance(value, (int, float)):
-                if metric_key in ['占比', '比例'] or '占比' in metric_key:
+                # 首先检查是否为NaN值
+                if pd.isna(value):
+                    formatted_value = "N/A"
+                elif metric_key in ['占比', '比例'] or '占比' in metric_key:
                     formatted_value = f"{value:.1%}"
                 elif isinstance(value, float) and value != int(value):
                     formatted_value = f"{value:.2f}"
                 else:
+                    # 安全地转换为整数
                     formatted_value = str(int(value))
             else:
                 formatted_value = str(value)
@@ -377,10 +381,10 @@ class BankAnalyzer(BaseAnalyzer):
         friendly_names = {
             '工作日交易数': '工作日交易次数',
             '周末交易数': '周末交易次数',
-            '工作日占比': '工作日交易比例',
+            '工作日占比': '工作日交易占全部交易的百分比',
             '工作时间交易数': '工作时间交易次数',
             '非工作时间交易数': '非工作时间交易次数',
-            '工作时间占比': '工作时间交易比例',
+            '工作时间占比': '工作时间交易占全部交易的百分比',
             '小额': '小额交易（1000元以下）',
             '中额': '中额交易（1000-1万元）',
             '大额': '大额交易（1万-10万元）',
@@ -860,7 +864,26 @@ class BankAnalyzer(BaseAnalyzer):
 
         # 计算时间跨度
         time_span = transfer_data.groupby(grouping_keys)['交易日期'].agg(['min', 'max']).reset_index()
-        time_span['交易时间跨度'] = (time_span['max'] - time_span['min']).dt.days + 1
+        
+        # 确保日期列是datetime类型，并处理可能的NaN值
+        time_span['min'] = pd.to_datetime(time_span['min'], errors='coerce')
+        time_span['max'] = pd.to_datetime(time_span['max'], errors='coerce')
+        
+        # 计算时间跨度，处理可能的NaN值
+        time_span['交易时间跨度'] = 0
+        valid_mask = ~time_span['min'].isna() & ~time_span['max'].isna()
+        if valid_mask.any():
+            # 安全地计算时间差，避免非日期类型数据
+            time_diff = time_span.loc[valid_mask, 'max'] - time_span.loc[valid_mask, 'min']
+            # 检查时间差是否具有.dt访问器，并且所有元素都是Timedelta类型
+            if hasattr(time_diff, 'dt') and all(isinstance(x, pd.Timedelta) for x in time_diff):
+                time_span.loc[valid_mask, '交易时间跨度'] = time_diff.dt.days + 1
+            else:
+                # 如果无法使用.dt访问器，尝试直接计算天数
+                try:
+                    time_span.loc[valid_mask, '交易时间跨度'] = time_diff.apply(lambda x: x.days + 1 if hasattr(x, 'days') else 0)
+                except:
+                    time_span.loc[valid_mask, '交易时间跨度'] = 0
         
         # 合并结果
         result = pd.merge(grouped, time_span[grouping_keys + ['交易时间跨度']], on=grouping_keys, how='left')
@@ -891,13 +914,39 @@ class BankAnalyzer(BaseAnalyzer):
 
         date_col = self.bank_model.date_column
         df = data.copy()
-        df[date_col] = pd.to_datetime(df[date_col])
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         
         # 预计算所有年份的节假日公历日期
-        years = df[date_col].dt.year.dropna().unique()
+        # 安全地提取年份，处理可能的无效日期数据
+        try:
+            # 先检查日期列是否包含有效的datetime对象
+            valid_dates = df[date_col].dropna()
+            if len(valid_dates) == 0:
+                self.logger.warning("日期列中没有有效的日期数据，跳过特殊日期分析")
+                return pd.DataFrame()
+                
+            # 确保所有有效日期都是datetime类型
+            if not all(isinstance(x, pd.Timestamp) for x in valid_dates):
+                self.logger.warning("日期列包含非datetime类型数据，跳过特殊日期分析")
+                return pd.DataFrame()
+                
+            years = valid_dates.dt.year.unique()
+        except AttributeError:
+            # 如果.dt访问器不可用，说明日期列包含无效数据
+            self.logger.warning("日期列包含无效数据，无法使用.dt访问器，跳过特殊日期分析")
+            return pd.DataFrame()
+            
         holiday_map = {}
         for year_float in years:
-            year = int(year_float)
+            # 安全地转换为整数，处理NaN值
+            if pd.isna(year_float):
+                continue
+            try:
+                year = int(year_float)
+            except (ValueError, TypeError):
+                self.logger.warning(f"无法将年份值 {year_float} 转换为整数")
+                continue
+            
             for name, details in special_dates_config.items():
                 try:
                     if details['type'] == 'lunar':
@@ -910,8 +959,8 @@ class BankAnalyzer(BaseAnalyzer):
                     self.logger.warning(f"无法计算日期 '{name}' 在 {year} 年: {e}")
                     continue
         
-        # 将交易日期标准化为date对象，并映射节假日名称
-        df['normalized_date'] = df[date_col].dt.date
+        # 将交易日期标准化为date对象，并映射节假日名称（安全处理）
+        df['normalized_date'] = df[date_col].apply(lambda x: x.date() if hasattr(x, 'date') else pd.NaT)
         df['特殊日期名称'] = df['normalized_date'].map(holiday_map)
         
         special_transactions = df.dropna(subset=['特殊日期名称']).copy()
@@ -1031,4 +1080,4 @@ class BankAnalyzer(BaseAnalyzer):
         # 根据存取现类型确定金额列
         amount_col = '收入金额' if cash_type == '存现' else '支出金额'
         
-        return cash_data.nlargest(top_n, amount_col) 
+        return cash_data.nlargest(top_n, amount_col)

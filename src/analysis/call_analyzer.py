@@ -160,7 +160,17 @@ class CallAnalyzer(BaseAnalyzer):
         date_max_col = f'{date_col}_max'
         
         if date_max_col in result.columns and date_min_col in result.columns:
-            result['通话时间跨度'] = (result[date_max_col] - result[date_min_col]).dt.days + 1
+            # 安全地计算时间跨度，避免非日期类型数据
+            time_diff = result[date_max_col] - result[date_min_col]
+            # 检查时间差是否具有.dt访问器，并且所有元素都是Timedelta类型
+            if hasattr(time_diff, 'dt') and all(isinstance(x, pd.Timedelta) for x in time_diff):
+                result['通话时间跨度'] = time_diff.dt.days + 1
+            else:
+                # 如果无法使用.dt访问器，尝试直接计算天数
+                try:
+                    result['通话时间跨度'] = time_diff.apply(lambda x: x.days + 1 if hasattr(x, 'days') else 0)
+                except:
+                    result['通话时间跨度'] = 0
         else:
             result['通话时间跨度'] = 1
 
@@ -292,4 +302,4 @@ class CallAnalyzer(BaseAnalyzer):
         sorted_result = frequency_result.sort_values(by='通话总时长', ascending=False)
         
         # 返回前N条记录
-        return sorted_result.head(top_n) 
+        return sorted_result.head(top_n)

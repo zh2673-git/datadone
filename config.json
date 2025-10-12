@@ -1081,7 +1081,7 @@
         "config_auto_reload": true,
         "config_reload_interval": 60,
         "cache_enabled": true,
-        "cache_timeout": 3600,
+        "cache_timeout": 86400,
         "cache_dir": "cache"
     },
     "output": {

@@ -118,11 +118,14 @@ class AdvancedAnalysisEngine:
         
         # 确保日期列是datetime类型
         if date_column in data.columns:
-            data[date_column] = self._safe_datetime_convert(data[date_column])
+            data.loc[:, date_column] = self._safe_datetime_convert(data[date_column])
 
             # 按工作日/周末分析
-            data['weekday'] = data[date_column].dt.weekday
-            data['is_weekend'] = data['weekday'].isin([5, 6])
+            # 安全地提取星期几，避免非日期类型数据
+            data.loc[:, 'weekday'] = data[date_column].apply(
+                lambda x: x.weekday() if hasattr(x, 'weekday') else -1
+            )
+            data.loc[:, 'is_weekend'] = data['weekday'].isin([5, 6])
 
             results['weekday_distribution'] = {
                 '工作日交易数': len(data[~data['is_weekend']]),
@@ -131,7 +134,10 @@ class AdvancedAnalysisEngine:
             }
 
             # 按月份分析
-            data['month'] = data[date_column].dt.month
+            # 安全地提取月份，避免非日期类型数据
+            data.loc[:, 'month'] = data[date_column].apply(
+                lambda x: x.month if hasattr(x, 'month') else -1
+            )
             monthly_stats = data.groupby('month').agg({
                 date_column: 'count',
                 '交易金额': ['sum', 'mean'] if '交易金额' in data.columns else 'count'
@@ -140,8 +146,11 @@ class AdvancedAnalysisEngine:
 
             # 按小时分析（如果有时间列）
             if time_column and time_column in data.columns:
-                data[time_column] = self._safe_datetime_convert(data[time_column])
-                data['hour'] = data[time_column].dt.hour
+                data.loc[:, time_column] = self._safe_datetime_convert(data[time_column])
+                # 安全地提取小时，避免非日期类型数据
+                data.loc[:, 'hour'] = data[time_column].apply(
+                    lambda x: x.hour if hasattr(x, 'hour') else -1
+                )
                 
                 # 工作时间 vs 非工作时间
                 working_hours_mask = (data['hour'] >= self.working_hours_start) & (data['hour'] <= self.working_hours_end)
@@ -251,34 +260,39 @@ class AdvancedAnalysisEngine:
         anomalies = []
         
         # 确保日期时间列是正确的类型
-        data[date_column] = self._safe_datetime_convert(data[date_column])
+        data.loc[:, date_column] = self._safe_datetime_convert(data[date_column])
         if time_column and time_column in data.columns:
-            data[time_column] = self._safe_datetime_convert(data[time_column])
+            data.loc[:, time_column] = self._safe_datetime_convert(data[time_column])
 
             # 合并日期和时间
             try:
                 # 明确指定日期时间格式以避免警告
-                date_str = data[date_column].dt.date.astype(str)
-                time_str = data[time_column].dt.time.astype(str)
+                # 安全地提取日期和时间，避免非日期类型数据
+                date_str = data[date_column].apply(
+                    lambda x: x.date().isoformat() if hasattr(x, 'date') else '1900-01-01'
+                )
+                time_str = data[time_column].apply(
+                    lambda x: x.time().isoformat() if hasattr(x, 'time') else '00:00:00'
+                )
                 datetime_str = date_str + ' ' + time_str
 
                 # 尝试使用常见的日期时间格式
                 try:
-                    data['datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
+                    data.loc[:, 'datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S', errors='coerce')
                 except:
                     try:
-                        data['datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+                        data.loc[:, 'datetime'] = pd.to_datetime(datetime_str, format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
                     except:
                         # 如果指定格式失败，使用自动推断但不显示警告
                         import warnings
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore")
-                            data['datetime'] = pd.to_datetime(datetime_str, errors='coerce')
+                            data.loc[:, 'datetime'] = pd.to_datetime(datetime_str, errors='coerce')
             except:
                 # 如果合并失败，只使用日期
-                data['datetime'] = data[date_column]
+                data.loc[:, 'datetime'] = data[date_column]
         else:
-            data['datetime'] = data[date_column]
+            data.loc[:, 'datetime'] = data[date_column]
         
         # 按人员分组检测异常
         for person, person_data in data.groupby(person_column):
@@ -310,8 +324,13 @@ class AdvancedAnalysisEngine:
             
             # 3. 时间间隔异常检测
             if len(person_data) > 1 and 'datetime' in person_data.columns:
-                time_diffs = person_data['datetime'].diff().dt.total_seconds() / 3600  # 转换为小时
-                short_intervals = time_diffs[time_diffs < self.time_gap_threshold_hours]
+                # 安全地计算时间间隔，避免非日期类型数据
+                time_diffs = person_data['datetime'].diff()
+                # 安全地转换为秒数
+                time_diffs_seconds = time_diffs.apply(
+                    lambda x: x.total_seconds() if hasattr(x, 'total_seconds') else 0
+                ) / 3600  # 转换为小时
+                short_intervals = time_diffs_seconds[time_diffs_seconds < self.time_gap_threshold_hours]
                 
                 if len(short_intervals) > 0:
                     anomalies.append({

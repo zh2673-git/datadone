@@ -107,12 +107,13 @@ class CommandLineInterface(BaseInterface):
             "执行分析",
             "导出已有分析结果",
             "缓存管理",
+            "热重载数据",
             "退出系统"
         ]
         
         choice = self.display_menu(options, "主菜单")
         
-        if choice == 4:  # 退出系统
+        if choice == 5:  # 退出系统
             return -1
         
         return choice
@@ -127,53 +128,129 @@ class CommandLineInterface(BaseInterface):
             选择的选项索引(0-based)
         """
         menu_actions = {
-            0: self.load_data,
+            0: self.handle_load_data_choice,
             1: self.run_analysis_menu,
             2: self.export_results_menu,
             3: self.cache_management_menu,
+            4: self.hot_reload_data,
         }
         action = menu_actions.get(choice)
         if action:
             action()
     
-    def load_data(self, use_cache: bool = True):
+    def handle_load_data_choice(self):
         """
-        加载数据
-        自动加载data文件夹下的所有表格数据
+        处理加载数据选项，根据当前数据状态提供不同选择
+        """
+        # 检查是否已有数据加载
+        has_existing_data = any(model is not None and not model.data.empty for model in self.data_models.values())
+        
+        if has_existing_data:
+            # 已有数据，提供选择
+            print("\n=> 数据加载选项")
+            print("-" * 20)
+            print("检测到系统中已有加载的数据")
+            
+            options = [
+                "使用现有数据（不重新加载）",
+                "重新加载数据（强制刷新）",
+                "返回主菜单"
+            ]
+            
+            choice = self.display_menu(options, "数据加载选项")
+            
+            if choice == 0:  # 使用现有数据
+                self.display_success("继续使用现有数据")
+                return
+            elif choice == 1:  # 重新加载数据
+                self.load_data(force_reload=True)
+            # choice == 2: 返回主菜单，无需处理
+        else:
+            # 没有数据，直接加载
+            self.load_data()
+    
+    def load_data(self, use_cache: bool = True, hot_reload: bool = False, force_reload: bool = False) -> bool:
+        """
+        加载数据，支持缓存和热重载
         
         Parameters:
         -----------
         use_cache : bool, optional
             是否使用缓存，默认为True
+        hot_reload : bool, optional
+            是否热重载，默认为False
+        force_reload : bool, optional
+            是否强制重新加载数据，默认为False
+            
+        Returns:
+        --------
+        bool
+            数据加载是否成功
         """
         print("\n=> 步骤 1: 加载数据")
         print("-" * 20)
         
+        # 热重载：清除缓存并重新加载
+        if hot_reload:
+            print("正在执行热重载...")
+            self.cache_manager.clear_cache()
+            use_cache = False  # 热重载时不使用缓存
+        
+        # 检查是否已有数据加载
+        has_existing_data = any(model is not None and not model.data.empty for model in self.data_models.values())
+        
+        # 如果已有数据且不强制重新加载，则直接使用现有数据
+        if has_existing_data and not force_reload:
+            self.display_success("使用已加载的数据")
+            self._initialize_analyzers()
+            return True
+        
         # 尝试从缓存加载
-        if use_cache:
-            cached_data = self.cache_manager.load_data_models()
-            if cached_data is not None:
-                self.data_models = cached_data
-                self.display_success("从缓存加载数据成功")
-                
-                # 数据加载后，重新初始化分析器
-                self._initialize_analyzers()
-                return
+        if use_cache and not force_reload:
+            try:
+                if self.cache_manager.is_cache_valid():
+                    self.logger.info("缓存有效，尝试从缓存加载数据...")
+                    cached_data = self.cache_manager.load_data_models()
+                    if cached_data is not None:
+                        self.data_models = cached_data
+                        self.display_success("从缓存加载数据成功")
+                        
+                        # 数据加载后，重新初始化分析器
+                        self._initialize_analyzers()
+                        return True
+                    else:
+                        self.logger.warning("从缓存加载数据失败，将重新加载")
+                else:
+                    self.logger.info("缓存无效，将重新加载数据")
+            except Exception as e:
+                self.logger.error(f"缓存加载异常: {e}，将重新加载数据")
         
-        # 缓存不可用，重新加载数据
-        self.auto_load_all_data()
+        # 缓存不可用或强制重新加载，重新加载数据
+        if not self.auto_load_all_data():
+            self.logger.error("自动加载数据失败")
+            return False
         
-        # 保存到缓存
+        # 保存到缓存（使用版本化缓存）
         if use_cache:
-            self.cache_manager.save_data_models(self.data_models)
+            try:
+                # 生成版本标识（使用时间戳）
+                version = datetime.now().strftime("%Y%m%d_%H%M%S")
+                success = self.cache_manager.save_data_models(self.data_models, version=version)
+                if success:
+                    self.logger.info(f"数据已保存到缓存版本 {version}")
+                else:
+                    self.logger.warning("缓存保存失败，但数据加载成功")
+            except Exception as e:
+                self.logger.error(f"保存缓存失败: {e}")
         
         # 数据加载后，重新初始化分析器
         self._initialize_analyzers()
         self.display_success("数据加载和预处理完成")
+        return True
     
     def cache_management_menu(self):
         """
-        缓存管理菜单
+        缓存管理菜单（支持版本化缓存）
         """
         print("\n=> 缓存管理")
         print("-" * 20)
@@ -181,16 +258,22 @@ class CommandLineInterface(BaseInterface):
         # 显示缓存信息
         cache_info = self.cache_manager.get_cache_info()
         print(f"缓存目录: {cache_info['cache_dir']}")
-        print(f"缓存文件存在: {'是' if cache_info['data_cache_exists'] else '否'}")
-        print(f"缓存有效: {'是' if cache_info['cache_valid'] else '否'}")
+        print(f"缓存启用: {'是' if cache_info['enabled'] else '否'}")
+        print(f"缓存超时: {cache_info['timeout']} 秒")
+        print(f"可用缓存版本数: {cache_info['version_count']}")
         
-        if cache_info['data_cache_exists']:
-            print(f"缓存大小: {cache_info.get('cache_size', 0)} 字节")
-            print(f"缓存修改时间: {cache_info.get('cache_mtime', '未知')}")
+        # 显示可用缓存版本
+        if cache_info['available_versions']:
+            print("\n可用缓存版本:")
+            for i, version_info in enumerate(cache_info['available_versions']):
+                print(f"  {i+1}. 版本 {version_info['version']} - {version_info['formatted_time']} - {version_info['size']} 字节")
+        else:
+            print("\n暂无可用缓存")
         
         options = [
             "重新加载数据（不使用缓存）",
-            "清除缓存",
+            "清除所有缓存",
+            "选择特定缓存版本加载",
             "返回主菜单"
         ]
         
@@ -198,12 +281,62 @@ class CommandLineInterface(BaseInterface):
         
         if choice == 0:  # 重新加载数据（不使用缓存）
             self.load_data(use_cache=False)
-        elif choice == 1:  # 清除缓存
+        elif choice == 1:  # 清除所有缓存
             if self.cache_manager.clear_cache():
-                self.display_success("缓存已清除")
+                self.display_success("所有缓存已清除")
             else:
                 self.display_error("清除缓存失败")
-        # choice == 2: 返回主菜单，无需处理
+        elif choice == 2:  # 选择特定缓存版本加载
+            self._load_specific_cache_version()
+        # choice == 3: 返回主菜单，无需处理
+    
+    def _load_specific_cache_version(self):
+        """
+        选择特定缓存版本加载
+        """
+        cache_info = self.cache_manager.get_cache_info()
+        if not cache_info['available_versions']:
+            self.display_error("没有可用的缓存版本")
+            return
+        
+        print("\n=> 选择缓存版本")
+        print("-" * 20)
+        
+        # 显示缓存版本选项
+        versions = cache_info['available_versions']
+        options = [f"版本 {v['version']} - {v['formatted_time']} - {v['size']} 字节" for v in versions]
+        options.append("返回缓存管理")
+        
+        choice = self.display_menu(options, "选择缓存版本")
+        
+        if choice == len(options) - 1:  # 返回缓存管理
+            return
+        
+        if 0 <= choice < len(versions):
+            selected_version = versions[choice]['version']
+            self.logger.info(f"尝试从缓存版本 {selected_version} 加载数据")
+            
+            # 从指定版本加载数据
+            cached_data = self.cache_manager.load_data_models(version=selected_version)
+            if cached_data is not None:
+                self.data_models = cached_data
+                self._initialize_analyzers()
+                self.display_success(f"从缓存版本 {selected_version} 加载数据成功")
+            else:
+                self.display_error(f"从缓存版本 {selected_version} 加载数据失败")
+        else:
+            self.display_error("无效的选择")
+    
+    def hot_reload_data(self):
+        """
+        热重载数据
+        """
+        print("\n=> 热重载数据")
+        print("-" * 20)
+        
+        if self.get_yes_no_input("确定要热重载数据吗？这将清除缓存并重新加载所有数据"):
+            self.load_data(use_cache=False, hot_reload=True)
+            self.display_success("热重载完成")
     
     def auto_load_all_data(self):
         """

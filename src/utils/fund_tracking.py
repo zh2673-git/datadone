@@ -80,6 +80,379 @@ class FundTrackingEngine:
             self.logger.warning("未提供数据模型，无法进行大额资金追踪")
             return pd.DataFrame()
         
+        self.logger.info("开始大额资金追踪分析...")
+        
+        # 收集所有大额交易
+        all_large_transactions = []
+        
+        for model_name, model in data_models.items():
+            if model is None or model.data.empty:
+                continue
+                
+            # 检查模型是否支持大额资金追踪（需要有金额列）
+            if not hasattr(model, 'amount_column'):
+                self.logger.debug(f"跳过 {model_name} 数据模型，不支持大额资金追踪")
+                continue
+                
+            # 根据模型类型获取相应的列名
+            if hasattr(model, 'name_column'):
+                name_col = model.name_column
+                amount_col = model.amount_column
+                date_col = model.date_column
+                
+                if hasattr(model, 'opposite_name_column'):
+                    opposite_name_col = model.opposite_name_column
+                else:
+                    opposite_name_col = None
+                
+                # 筛选大额交易
+                large_transactions = self._extract_large_transactions(
+                    model.data, name_col, amount_col, date_col, opposite_name_col, model_name
+                )
+                
+                if not large_transactions.empty:
+                    all_large_transactions.append(large_transactions)
+        
+        if not all_large_transactions:
+            self.logger.info("未发现大额交易")
+            return pd.DataFrame()
+        
+        # 合并所有大额交易
+        combined_transactions = pd.concat(all_large_transactions, ignore_index=True)
+        
+        # 按时间排序
+        combined_transactions = combined_transactions.sort_values('交易日期')
+        
+        # 构建资金流向追踪结果
+        tracking_results = self._build_fund_flow_tracking(combined_transactions, data_models)
+        
+        self.logger.info(f"大额资金追踪完成，共追踪到 {len(tracking_results)} 条记录")
+        
+        return tracking_results
+    
+    def _analyze_fund_sources(self, transactions: pd.DataFrame, data_models: Dict[str, object], month: str) -> Dict:
+        """
+        分析资金来源明细
+        
+        Parameters:
+        -----------
+        transactions : pd.DataFrame
+            交易数据
+        data_models : Dict[str, object]
+            数据模型字典
+        month : str
+            月份
+            
+        Returns:
+        --------
+        Dict
+            资金来源明细
+        """
+        income_transactions = transactions[transactions['交易方向'] == '收入']
+        
+        source_details = {
+            '现金收入': 0,
+            '银行转账': {},
+            '微信转账': {},
+            '支付宝转账': {},
+            '其他收入': {}
+        }
+        
+        for _, tx in income_transactions.iterrows():
+            amount = abs(tx['交易金额'])
+            opposite_person = tx.get('对方姓名', '未知')
+            data_source = tx.get('数据来源', '未知')
+            
+            # 根据数据来源分类
+            if '银行' in data_source:
+                if opposite_person not in source_details['银行转账']:
+                    source_details['银行转账'][opposite_person] = 0
+                source_details['银行转账'][opposite_person] += amount
+            elif '微信' in data_source:
+                if opposite_person not in source_details['微信转账']:
+                    source_details['微信转账'][opposite_person] = 0
+                source_details['微信转账'][opposite_person] += amount
+            elif '支付宝' in data_source:
+                if opposite_person not in source_details['支付宝转账']:
+                    source_details['支付宝转账'][opposite_person] = 0
+                source_details['支付宝转账'][opposite_person] += amount
+            else:
+                # 检查是否为现金收入
+                if '现金' in str(tx.get('交易摘要', '')) or '现金' in str(tx.get('交易备注', '')):
+                    source_details['现金收入'] += amount
+                else:
+                    if opposite_person not in source_details['其他收入']:
+                        source_details['其他收入'][opposite_person] = 0
+                    source_details['其他收入'][opposite_person] += amount
+        
+        return source_details
+    
+    def _analyze_fund_destinations(self, transactions: pd.DataFrame, data_models: Dict[str, object], month: str) -> Dict:
+        """
+        分析资金去向明细
+        
+        Parameters:
+        -----------
+        transactions : pd.DataFrame
+            交易数据
+        data_models : Dict[str, object]
+            数据模型字典
+        month : str
+            月份
+            
+        Returns:
+        --------
+        Dict
+            资金去向明细
+        """
+        expense_transactions = transactions[transactions['交易方向'] == '支出']
+        
+        destination_details = {
+            '现金支出': 0,
+            '银行转账': {},
+            '微信转账': {},
+            '支付宝转账': {},
+            '其他支出': {}
+        }
+        
+        for _, tx in expense_transactions.iterrows():
+            amount = abs(tx['交易金额'])
+            opposite_person = tx.get('对方姓名', '未知')
+            data_source = tx.get('数据来源', '未知')
+            
+            # 根据数据来源分类
+            if '银行' in data_source:
+                if opposite_person not in destination_details['银行转账']:
+                    destination_details['银行转账'][opposite_person] = 0
+                destination_details['银行转账'][opposite_person] += amount
+            elif '微信' in data_source:
+                if opposite_person not in destination_details['微信转账']:
+                    destination_details['微信转账'][opposite_person] = 0
+                destination_details['微信转账'][opposite_person] += amount
+            elif '支付宝' in data_source:
+                if opposite_person not in destination_details['支付宝转账']:
+                    destination_details['支付宝转账'][opposite_person] = 0
+                destination_details['支付宝转账'][opposite_person] += amount
+            else:
+                # 检查是否为现金支出
+                if '现金' in str(tx.get('交易摘要', '')) or '现金' in str(tx.get('交易备注', '')):
+                    destination_details['现金支出'] += amount
+                else:
+                    if opposite_person not in destination_details['其他支出']:
+                        destination_details['其他支出'][opposite_person] = 0
+                    destination_details['其他支出'][opposite_person] += amount
+        
+        return destination_details
+    
+    def _generate_detailed_remark(self, person_name: str, month: str, income: float, expense: float,
+                                 source_details: Dict, destination_details: Dict) -> str:
+        """
+        生成详细的备注信息
+        
+        Parameters:
+        -----------
+        person_name : str
+            人员姓名
+        month : str
+            月份
+        income : float
+            总收入
+        expense : float
+            总支出
+        source_details : Dict
+            资金来源明细
+        destination_details : Dict
+            资金去向明细
+            
+        Returns:
+        --------
+        str
+            详细的备注信息
+        """
+        remark_parts = []
+        
+        # 计算净流入金额
+        net_amount = income - expense
+        
+        # 收入部分 - 详细记录每笔收入来源
+        if income > 0:
+            income_parts = [f"总收入{income:,.0f}元"]
+            
+            # 现金收入
+            if source_details['现金收入'] > 0:
+                income_parts.append(f"现金收入{source_details['现金收入']:,.0f}元")
+            
+            # 银行转账收入 - 详细记录每个转账人
+            if source_details['银行转账']:
+                bank_total = sum(source_details['银行转账'].values())
+                bank_details = []
+                for person, amount in source_details['银行转账'].items():
+                    bank_details.append(f"{person}银行转账{amount:,.0f}元")
+                if bank_details:
+                    income_parts.append(f"银行转账收入{bank_total:,.0f}元(" + "、".join(bank_details) + ")")
+            
+            # 微信转账收入 - 详细记录每个转账人
+            if source_details['微信转账']:
+                wechat_total = sum(source_details['微信转账'].values())
+                wechat_details = []
+                for person, amount in source_details['微信转账'].items():
+                    wechat_details.append(f"{person}微信{amount:,.0f}元")
+                if wechat_details:
+                    income_parts.append(f"微信收入{wechat_total:,.0f}元(" + "、".join(wechat_details) + ")")
+            
+            # 支付宝转账收入 - 详细记录每个转账人
+            if source_details['支付宝转账']:
+                alipay_total = sum(source_details['支付宝转账'].values())
+                alipay_details = []
+                for person, amount in source_details['支付宝转账'].items():
+                    alipay_details.append(f"{person}支付宝{amount:,.0f}元")
+                if alipay_details:
+                    income_parts.append(f"支付宝收入{alipay_total:,.0f}元(" + "、".join(alipay_details) + ")")
+            
+            # 其他收入 - 详细记录每个来源
+            if source_details['其他收入']:
+                other_total = sum(source_details['其他收入'].values())
+                other_details = []
+                for person, amount in source_details['其他收入'].items():
+                    other_details.append(f"{person}{amount:,.0f}元")
+                if other_details:
+                    income_parts.append(f"其他收入{other_total:,.0f}元(" + "、".join(other_details) + ")")
+            
+            remark_parts.append("资金来源：" + "；".join(income_parts))
+        
+        # 支出部分 - 详细记录每笔支出去向
+        if expense > 0:
+            expense_parts = [f"总支出{expense:,.0f}元"]
+            
+            # 现金支出
+            if destination_details['现金支出'] > 0:
+                expense_parts.append(f"现金支出{destination_details['现金支出']:,.0f}元")
+            
+            # 银行转账支出 - 详细记录每个收款人
+            if destination_details['银行转账']:
+                bank_total = sum(destination_details['银行转账'].values())
+                bank_details = []
+                for person, amount in destination_details['银行转账'].items():
+                    bank_details.append(f"{person}银行转账{amount:,.0f}元")
+                if bank_details:
+                    expense_parts.append(f"银行转账支出{bank_total:,.0f}元(" + "、".join(bank_details) + ")")
+            
+            # 微信转账支出 - 详细记录每个收款人
+            if destination_details['微信转账']:
+                wechat_total = sum(destination_details['微信转账'].values())
+                wechat_details = []
+                for person, amount in destination_details['微信转账'].items():
+                    wechat_details.append(f"{person}微信{amount:,.0f}元")
+                if wechat_details:
+                    expense_parts.append(f"微信支出{wechat_total:,.0f}元(" + "、".join(wechat_details) + ")")
+            
+            # 支付宝转账支出 - 详细记录每个收款人
+            if destination_details['支付宝转账']:
+                alipay_total = sum(destination_details['支付宝转账'].values())
+                alipay_details = []
+                for person, amount in destination_details['支付宝转账'].items():
+                    alipay_details.append(f"{person}支付宝{amount:,.0f}元")
+                if alipay_details:
+                    expense_parts.append(f"支付宝支出{alipay_total:,.0f}元(" + "、".join(alipay_details) + ")")
+            
+            # 其他支出 - 详细记录每个去向
+            if destination_details['其他支出']:
+                other_total = sum(destination_details['其他支出'].values())
+                other_details = []
+                for person, amount in destination_details['其他支出'].items():
+                    other_details.append(f"{person}{amount:,.0f}元")
+                if other_details:
+                    expense_parts.append(f"其他支出{other_total:,.0f}元(" + "、".join(other_details) + ")")
+            
+            remark_parts.append("资金去向：" + "；".join(expense_parts))
+        
+        # 添加净流入/流出信息
+        if net_amount > 0:
+            remark_parts.append(f"净流入{net_amount:,.0f}元")
+        elif net_amount < 0:
+            remark_parts.append(f"净流出{-net_amount:,.0f}元")
+        else:
+            remark_parts.append("收支平衡")
+        
+        return f"{person_name}{month.strftime('%Y年%m月')}大额资金流向：" + "；".join(remark_parts)
+    
+    def _track_person_funds_by_month(self, person_name: str, person_transactions: pd.DataFrame,
+                                data_models: Dict[str, object], month: str, 
+                                current_depth: int = 0, visited_persons: Optional[Set[str]] = None) -> pd.DataFrame:
+        """
+        按月份追踪单个人员的大额资金流向
+        
+        Parameters:
+        -----------
+        person_name : str
+            人员姓名
+        person_transactions : pd.DataFrame
+            该人员的大额交易
+        data_models : Dict[str, object]
+            数据模型字典
+        month : str
+            月份
+        current_depth : int
+            当前追踪深度
+        visited_persons : Set[str], optional
+            已访问的人员集合，用于避免循环追踪
+            
+        Returns:
+        --------
+        pd.DataFrame
+            该人员的资金流向追踪结果
+        """
+        if visited_persons is None:
+            visited_persons = set()
+        
+        # 避免循环追踪
+        if person_name in visited_persons or current_depth >= self.max_tracking_depth:
+            return pd.DataFrame()
+        
+        visited_persons.add(person_name)
+        
+        tracking_results = []
+        
+        # 统计该人员在该月份的大额资金流入和流出
+        month_income = person_transactions[person_transactions['交易方向'] == '收入']['交易金额'].sum()
+        month_expense = person_transactions[person_transactions['交易方向'] == '支出']['交易金额'].sum()
+        
+        # 分析资金来源和去向明细
+        source_details = self._analyze_fund_sources(person_transactions, data_models, month)
+        destination_details = self._analyze_fund_destinations(person_transactions, data_models, month)
+        
+        # 生成详细的备注信息
+        remark = self._generate_detailed_remark(person_name, month, month_income, month_expense, 
+                                               source_details, destination_details)
+        
+        # 添加月度汇总记录
+        tracking_results.append({
+            '追踪层级': current_depth,
+            '核心人员': person_name,
+            '关联人员': '月度汇总',
+            '交易日期': month.strftime('%Y年%m月'),
+            '交易金额': month_income - month_expense,  # 净流入
+            '交易方向': '汇总',
+            '大额级别': self._get_amount_level(max(abs(month_income), abs(month_expense))),
+            '数据来源': '月度统计',
+            '资金流向': '月度汇总',
+            '追踪说明': remark,
+            '月份': month.strftime('%Y年%m月')
+        })
+        
+        # 追踪单笔交易
+        for _, transaction in person_transactions.iterrows():
+            tracking_result = self._track_single_transaction(transaction, data_models, 
+                                                                   current_depth, visited_persons.copy())
+            
+            if tracking_result:
+                tracking_results.extend(tracking_result)
+        
+        if tracking_results:
+            return pd.DataFrame(tracking_results)
+        else:
+            return pd.DataFrame()
+        
         # 收集所有大额交易
         all_large_transactions = []
         
@@ -247,12 +620,16 @@ class FundTrackingEngine:
         
         tracking_results = []
         
-        # 按本方姓名分组，追踪每个人的大额资金流向
-        for person_name in transactions['本方姓名'].unique():
-            person_transactions = transactions[transactions['本方姓名'] == person_name]
-            
-            # 追踪该人员的大额资金流向
-            person_tracking = self._track_person_funds(person_name, person_transactions, data_models)
+        # 按月份和本方姓名分组，追踪每个人的大额资金流向
+        # 首先提取月份信息
+        transactions_copy = transactions.copy()
+        transactions_copy['交易日期'] = pd.to_datetime(transactions_copy['交易日期'], errors='coerce')
+        transactions_copy['月份'] = transactions_copy['交易日期'].dt.to_period('M')
+        
+        # 按月份和人员分组追踪
+        for (month, person_name), month_person_transactions in transactions_copy.groupby(['月份', '本方姓名']):
+            # 追踪该人员在该月份的大额资金流向
+            person_tracking = self._track_person_funds_by_month(person_name, month_person_transactions, data_models, month)
             
             if not person_tracking.empty:
                 tracking_results.append(person_tracking)

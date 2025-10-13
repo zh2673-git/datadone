@@ -158,6 +158,9 @@ class BankDataModel(BaseDataModel):
             self.data['数据来源'] = '银行数据' # 默认值
             self.logger.info("未找到文件路径，添加 '数据来源' 列，值为 '银行数据'")
 
+        # 8. 执行银行数据智能去重
+        self.remove_bank_duplicates()
+        
         self.logger.info("银行数据预处理完成")
     
     def add_cash_operation_flag(self):
@@ -508,4 +511,4 @@ class BankDataModel(BaseDataModel):
         
         if not self.data.empty:
             self.validate()
-            self.preprocess() 
+            self.preprocess()

@@ -140,6 +140,78 @@ class BaseDataModel(ABC):
             
         return removed_count
     
+    def remove_bank_duplicates(self, keep='first'):
+        """
+        针对银行数据的智能去重
+        
+        优化逻辑：通过本方姓名、银行类型、交易日期、交易金额、帐户余额几个字段综合判断重复
+        
+        Parameters:
+        -----------
+        keep : str, optional
+            保留策略：'first'保留第一个，'last'保留最后一个，False删除所有重复项
+            
+        Returns:
+        --------
+        int
+            删除的重复行数
+        """
+        if self.data.empty:
+            self.logger.warning("银行数据为空，无法去重")
+            return 0
+            
+        original_count = len(self.data)
+        
+        # 定义银行数据去重的关键字段
+        bank_duplicate_fields = []
+        
+        # 检查并添加可用的字段
+        if '本方姓名' in self.data.columns:
+            bank_duplicate_fields.append('本方姓名')
+        
+        # 银行类型字段的多种可能名称
+        bank_type_fields = ['银行类型', '银行名称', '开户行', '所属银行', '交易机构名称']
+        bank_type_found = False
+        
+        for field in bank_type_fields:
+            if field in self.data.columns:
+                bank_duplicate_fields.append(field)
+                bank_type_found = True
+                self.logger.info(f"使用银行类型字段: {field}")
+                break
+        
+        if not bank_type_found:
+            self.logger.warning("未找到银行类型相关字段")
+        
+        if '交易日期' in self.data.columns:
+            bank_duplicate_fields.append('交易日期')
+        
+        if '交易金额' in self.data.columns:
+            bank_duplicate_fields.append('交易金额')
+        
+        if '帐户余额' in self.data.columns:
+            bank_duplicate_fields.append('帐户余额')
+        elif '余额' in self.data.columns:
+            bank_duplicate_fields.append('余额')
+        
+        # 如果关键字段不足，使用默认去重
+        if len(bank_duplicate_fields) < 3:
+            self.logger.warning("银行数据关键字段不足，使用默认去重逻辑")
+            return self.remove_duplicates(keep=keep)
+        
+        # 执行银行数据智能去重
+        self.data = self.data.drop_duplicates(subset=bank_duplicate_fields, keep=keep)
+        
+        removed_count = original_count - len(self.data)
+        
+        if removed_count > 0:
+            self.logger.info(f"银行数据智能去重完成，删除了 {removed_count} 行重复数据")
+            self.logger.info(f"使用的去重字段: {bank_duplicate_fields}")
+        else:
+            self.logger.info("银行数据未发现重复数据")
+            
+        return removed_count
+    
     @abstractmethod
     def preprocess(self):
         """

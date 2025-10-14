@@ -38,9 +38,10 @@ class FundTrackingEngine:
         self.large_amount_thresholds = self.config.get(
             'analysis.key_transactions.large_amount_thresholds',
             {
-                "level1": {"min": 100000, "max": 500000, "name": "10万-50万"},
-                "level2": {"min": 500000, "max": 1000000, "name": "50万-100万"},
-                "level3": {"min": 1000000, "max": 999999999, "name": "100万及以上"}
+                "level1": {"min": 50000, "max": 100000, "name": "5万-10万"},
+                "level2": {"min": 100000, "max": 500000, "name": "10万-50万"},
+                "level3": {"min": 500000, "max": 1000000, "name": "50万-100万"},
+                "level4": {"min": 1000000, "max": 999999999, "name": "100万及以上"}
             }
         )
         

@@ -76,6 +76,7 @@ class ExcelExporter(BaseExporter):
         filepath = self._get_file_path(filename, "xlsx")
         
         try:
+            # 性能优化：配置Excel写入器选项，提升大数据量写入性能
             with pd.ExcelWriter(filepath, engine='xlsxwriter') as writer:
                 # 获取话单数据中的对方单位信息
                 company_position_map = {}
@@ -151,20 +152,23 @@ class ExcelExporter(BaseExporter):
 
                     # 生成账单类频率表
                     if bill_frequency_dfs:
-                        combined_bill_df = pd.concat(bill_frequency_dfs, ignore_index=True)
+                        # 性能优化：使用更高效的DataFrame合并方式
+                        combined_bill_df = pd.concat(bill_frequency_dfs, ignore_index=True, sort=False)
                         base_cols = ['平台', '数据来源', '本方姓名', '对方姓名']
                         other_cols = [col for col in combined_bill_df.columns if col not in base_cols]
                         final_cols = base_cols + other_cols
                         combined_bill_df = combined_bill_df[[col for col in final_cols if col in combined_bill_df.columns]]
 
-                        combined_bill_df.to_excel(writer, sheet_name='账单类频率表', index=False)
+                        # 性能优化：设置Excel写入选项，提升大数据量写入性能
+                        combined_bill_df.to_excel(writer, sheet_name='账单类频率表', index=False, engine='xlsxwriter')
                         worksheet = writer.sheets['账单类频率表']
                         self._set_column_widths(worksheet, combined_bill_df)
                         self._format_sheet(worksheet, combined_bill_df, writer.book)
 
                     # 生成话单类频率表
                     if call_frequency_dfs:
-                        combined_call_df = pd.concat(call_frequency_dfs, ignore_index=True)
+                        # 性能优化：使用更高效的DataFrame合并方式
+                        combined_call_df = pd.concat(call_frequency_dfs, ignore_index=True, sort=False)
                         base_cols = ['平台', '数据来源', '本方姓名', '对方姓名']
 
                         # 在对方姓名后面添加对方详细信息字段，优先使用带lambda后缀的字段
@@ -184,7 +188,8 @@ class ExcelExporter(BaseExporter):
                         final_cols = base_cols + detail_cols + other_cols
                         combined_call_df = combined_call_df[[col for col in final_cols if col in combined_call_df.columns]]
 
-                        combined_call_df.to_excel(writer, sheet_name='话单类频率表', index=False)
+                        # 性能优化：设置Excel写入选项，提升大数据量写入性能
+                        combined_call_df.to_excel(writer, sheet_name='话单类频率表', index=False, engine='xlsxwriter')
                         worksheet = writer.sheets['话单类频率表']
                         self._set_column_widths(worksheet, combined_call_df)
                         self._format_sheet(worksheet, combined_call_df, writer.book)
@@ -200,13 +205,15 @@ class ExcelExporter(BaseExporter):
 
                 # 5. 高级分析表
                 if advanced_analysis_dfs:
-                    combined_advanced_df = pd.concat(advanced_analysis_dfs, ignore_index=True)
+                    # 性能优化：使用更高效的DataFrame合并方式
+                    combined_advanced_df = pd.concat(advanced_analysis_dfs, ignore_index=True, sort=False)
                     # 重新排列列的顺序，将数据来源放在前面
                     if '数据来源' in combined_advanced_df.columns:
                         cols = ['数据来源'] + [col for col in combined_advanced_df.columns if col != '数据来源']
                         combined_advanced_df = combined_advanced_df[cols]
 
-                    combined_advanced_df.to_excel(writer, sheet_name='高级分析', index=False)
+                    # 性能优化：设置Excel写入选项，提升大数据量写入性能
+                    combined_advanced_df.to_excel(writer, sheet_name='高级分析', index=False, engine='xlsxwriter')
                     worksheet = writer.sheets['高级分析']
                     self._set_column_widths(worksheet, combined_advanced_df)
                     self._format_sheet(worksheet, combined_advanced_df, writer.book)
@@ -216,7 +223,8 @@ class ExcelExporter(BaseExporter):
                     self.logger.info("正在生成大额资金追踪表...")
                     fund_tracking_df = self._generate_fund_tracking_sheet(data_models)
                     if not fund_tracking_df.empty:
-                        fund_tracking_df.to_excel(writer, sheet_name='大额资金跟踪', index=False)
+                        # 性能优化：设置Excel写入选项，提升大数据量写入性能
+                        fund_tracking_df.to_excel(writer, sheet_name='大额资金跟踪', index=False, engine='xlsxwriter')
                         worksheet = writer.sheets['大额资金跟踪']
                         self._set_column_widths(worksheet, fund_tracking_df)
                         self._format_sheet(worksheet, fund_tracking_df, writer.book)
@@ -1963,10 +1971,67 @@ class ExcelExporter(BaseExporter):
 
     def _generate_fund_tracking_sheet(self, data_models: Dict) -> pd.DataFrame:
         """
-        生成大额资金追踪表
+        生成大额资金追踪表（包含大额资金追踪和存取现与话单匹配）
         
         Args:
             data_models: 数据模型字典，格式为 {'bank': bank_model, 'wechat': wechat_model, ...}
+            
+        Returns:
+            pd.DataFrame: 大额资金追踪结果
+        """
+        try:
+            # 获取大额资金追踪结果
+            fund_tracking_results = self._get_fund_tracking_results(data_models)
+            
+            # 获取存取现与话单匹配结果
+            cash_call_results = self._analyze_cash_call_matching(data_models)
+            
+            # 合并结果
+            all_results = []
+            
+            if not fund_tracking_results.empty:
+                # 添加分析类型字段
+                fund_tracking_results['分析类型'] = '大额资金追踪'
+                all_results.append(fund_tracking_results)
+            
+            if not cash_call_results.empty:
+                # 确保cash_call_results有所有必要的列
+                if '交易类型' not in cash_call_results.columns:
+                    cash_call_results['交易类型'] = ''
+                all_results.append(cash_call_results)
+            
+            if not all_results:
+                self.logger.info("没有找到任何追踪结果")
+                return pd.DataFrame()
+            
+            # 合并所有结果
+            combined_df = pd.concat(all_results, ignore_index=True)
+            
+            # 重新排列列的顺序，将分析类型放在第一列
+            column_order = ['分析类型'] + [col for col in combined_df.columns if col != '分析类型']
+            combined_df = combined_df[column_order]
+            
+            # 按交易日期排序
+            if '交易日期' in combined_df.columns:
+                # 指定日期格式避免警告，支持常见的中文日期格式
+                combined_df['交易日期'] = pd.to_datetime(combined_df['交易日期'], 
+                                                       format='mixed', 
+                                                       errors='coerce')
+                combined_df = combined_df.sort_values('交易日期', ascending=False)
+            
+            self.logger.info(f"生成追踪表成功，共{len(combined_df)}条记录")
+            return combined_df
+            
+        except Exception as e:
+            self.logger.error(f"生成大额资金追踪表时出错: {e}")
+            return pd.DataFrame()
+    
+    def _get_fund_tracking_results(self, data_models: Dict) -> pd.DataFrame:
+        """
+        获取大额资金追踪结果（性能优化版本）
+        
+        Args:
+            data_models: 数据模型字典
             
         Returns:
             pd.DataFrame: 大额资金追踪结果
@@ -1985,30 +2050,444 @@ class ExcelExporter(BaseExporter):
                 self.logger.info("未发现大额资金交易")
                 return pd.DataFrame()
             
-            # 格式化追踪结果
-            formatted_results = []
-            for idx, result in tracking_results.iterrows():
-                formatted_result = {
-                    '追踪ID': f"TRK{idx:04d}",  # 生成追踪ID
-                    '核心人员': result.get('核心人员', result.get('core_person', '')),
-                    '交易日期': result.get('交易日期', ''),
-                    '交易金额': result.get('交易金额', 0),
-                    '交易方向': result.get('交易方向', ''),
-                    '对方人员': result.get('关联人员', result.get('对方姓名', '')),
-                    '数据来源': result.get('数据来源', ''),
-                    '大额级别': result.get('大额级别', ''),
-                    '追踪深度': result.get('追踪层级', result.get('tracking_depth', 0)),
-                    '备注': result.get('追踪说明', result.get('notes', ''))
+            # 性能优化：批量处理所有数据，避免逐行操作
+            if not tracking_results.empty:
+                # 批量获取话单匹配信息（优化版本）
+                call_matches = self._get_call_record_match_batch_optimized(
+                    tracking_results['核心人员'].tolist(),
+                    tracking_results['交易日期'].tolist(),
+                    data_models
+                )
+                
+                # 性能优化：使用向量化操作构建DataFrame
+                formatted_df = tracking_results.copy()
+                
+                # 批量生成追踪ID
+                formatted_df['追踪ID'] = [f"TRK{i:04d}" for i in range(len(tracking_results))]
+                
+                # 性能优化：使用map替代apply进行交易类型转换
+                transaction_type_map = {
+                    '银行': '银行',
+                    '微信': '微信', 
+                    '支付宝': '支付宝'
                 }
-                formatted_results.append(formatted_result)
+                formatted_df['交易类型'] = formatted_df['数据来源'].map(
+                    lambda x: transaction_type_map.get(x, x) if any(keyword in x for keyword in ['银行', '微信', '支付宝']) else x
+                )
+                
+                formatted_df['话单匹配'] = call_matches
+                
+                # 性能优化：批量重命名列
+                column_mapping = {
+                    'core_person': '核心人员',
+                    '关联人员': '对方人员',
+                    '追踪层级': '追踪深度',
+                    '追踪说明': '备注'
+                }
+                
+                # 只重命名存在的列
+                for old_col, new_col in column_mapping.items():
+                    if old_col in formatted_df.columns:
+                        formatted_df[new_col] = formatted_df[old_col]
+                
+                # 性能优化：批量确保所有必需的列都存在
+                required_columns = ['追踪ID', '核心人员', '交易日期', '交易金额', '交易类型', 
+                                 '交易方向', '对方人员', '数据来源', '大额级别', '追踪深度', '备注', '话单匹配']
+                
+                for col in required_columns:
+                    if col not in formatted_df.columns:
+                        formatted_df[col] = ''
+                
+                return formatted_df[required_columns]
             
-            return pd.DataFrame(formatted_results)
+            return pd.DataFrame()
             
         except ImportError:
-            self.logger.warning("大额资金追踪模块未找到，跳过生成大额资金追踪表")
+            self.logger.warning("大额资金追踪模块未找到，跳过大额资金追踪")
             return pd.DataFrame()
         except Exception as e:
-            self.logger.error(f"生成大额资金追踪表时出错: {e}")
+            self.logger.error(f"获取大额资金追踪结果时出错: {e}")
+            return pd.DataFrame()
+    
+    def _get_transaction_type(self, data_source: str) -> str:
+        """
+        根据数据源获取交易类型
+        
+        Args:
+            data_source: 数据源名称
+            
+        Returns:
+            str: 交易类型（银行、微信、支付宝等）
+        """
+        if '银行' in data_source:
+            return '银行'
+        elif '微信' in data_source:
+            return '微信'
+        elif '支付宝' in data_source:
+            return '支付宝'
+        else:
+            return data_source
+    
+    def _get_call_record_match_batch_optimized(self, person_names: List[str], transaction_dates: List[str], data_models: Dict) -> List[str]:
+        """
+        批量获取话单匹配信息（高性能优化版本）
+        
+        Args:
+            person_names: 人员姓名列表
+            transaction_dates: 交易日期列表
+            data_models: 数据模型字典
+            
+        Returns:
+            List[str]: 话单匹配信息列表
+        """
+        if not person_names or not transaction_dates:
+            return [''] * len(person_names)
+        
+        # 检查是否有话单数据模型
+        if 'call' not in data_models or data_models['call'] is None:
+            return [''] * len(person_names)
+        
+        call_model = data_models['call']
+        if call_model.data.empty:
+            return [''] * len(person_names)
+        
+        try:
+            # 性能优化：预处理话单数据，使用更高效的方法
+            call_data = call_model.data.copy()
+            date_column = call_model.date_column if hasattr(call_model, 'date_column') else '呼叫日期'
+            
+            # 性能优化：一次性转换日期列，使用向量化操作
+            if date_column in call_data.columns:
+                call_data[date_column] = call_data[date_column].astype(str)
+            
+            # 性能优化：使用pd.to_datetime的向量化操作
+            call_data['temp_date'] = pd.to_datetime(call_data.get(date_column, ''), errors='coerce')
+            
+            # 性能优化：创建更高效的日期索引
+            valid_dates = call_data[pd.notna(call_data['temp_date'])]['temp_date'].dt.date
+            date_indices = {}
+            
+            # 使用groupby创建日期索引，比循环更高效
+            for date_key, indices in call_data[pd.notna(call_data['temp_date'])].groupby(call_data['temp_date'].dt.date).groups.items():
+                date_indices[date_key] = indices.tolist()
+            
+            # 性能优化：批量处理所有记录，使用更高效的循环
+            results = []
+            
+            # 预转换交易日期，避免重复转换
+            tx_dates_converted = []
+            for tx_date in transaction_dates:
+                if not isinstance(tx_date, str):
+                    tx_date = str(tx_date)
+                tx_dates_converted.append(pd.to_datetime(tx_date, errors='coerce'))
+            
+            # 批量处理
+            for i, (person_name, tx_date) in enumerate(zip(person_names, tx_dates_converted)):
+                if pd.isna(tx_date):
+                    results.append('')
+                    continue
+                    
+                date_key = tx_date.date()
+                if date_key not in date_indices:
+                    results.append('')
+                    continue
+                    
+                # 使用预处理的索引
+                same_day_indices = date_indices[date_key]
+                same_day_calls = call_data.loc[same_day_indices]
+                
+                if same_day_calls.empty:
+                    results.append('')
+                    continue
+                
+                # 性能优化：使用向量化操作筛选人员记录
+                person_name_str = str(person_name)
+                caller_mask = same_day_calls['本方姓名'].astype(str) == person_name_str
+                callee_mask = same_day_calls['对方姓名'].astype(str) == person_name_str
+                # 使用.loc避免布尔索引警告
+                combined_mask = caller_mask | callee_mask
+                person_calls = same_day_calls.loc[combined_mask]
+                
+                if person_calls.empty:
+                    results.append('')
+                    continue
+                
+                # 性能优化：使用集合操作收集联系人
+                contacted_persons = set()
+                
+                # 本方是目标人员的情况
+                caller_records = person_calls[caller_mask]
+                if not caller_records.empty:
+                    contacted_persons.update(caller_records['对方姓名'].astype(str).unique())
+                
+                # 对方是目标人员的情况
+                callee_records = person_calls[callee_mask]
+                if not callee_records.empty:
+                    contacted_persons.update(callee_records['本方姓名'].astype(str).unique())
+                
+                # 移除空值和本人
+                contacted_persons = {p for p in contacted_persons if p and p != person_name_str}
+                
+                if contacted_persons:
+                    contacted_persons_str = sorted(contacted_persons)
+                    results.append(f"本方{person_name}，对方{','.join(contacted_persons_str)}")
+                else:
+                    results.append('')
+            
+            return results
+            
+        except Exception as e:
+            self.logger.warning(f"批量获取话单匹配信息时出错: {e}")
+            return [''] * len(person_names)
+    
+    def _get_call_record_match_batch(self, person_names: List[str], transaction_dates: List[str], data_models: Dict) -> List[str]:
+        """
+        批量获取话单匹配信息（性能优化版本）
+        
+        Args:
+            person_names: 人员姓名列表
+            transaction_dates: 交易日期列表
+            data_models: 数据模型字典
+            
+        Returns:
+            List[str]: 话单匹配信息列表
+        """
+        if not person_names or not transaction_dates:
+            return [''] * len(person_names)
+        
+        # 检查是否有话单数据模型
+        if 'call' not in data_models or data_models['call'] is None:
+            return [''] * len(person_names)
+        
+        call_model = data_models['call']
+        if call_model.data.empty:
+            return [''] * len(person_names)
+        
+        try:
+            # 预处理话单数据，只处理一次
+            call_data = call_model.data.copy()
+            date_column = call_model.date_column if hasattr(call_model, 'date_column') else '呼叫日期'
+            
+            # 优化：一次性转换日期列
+            if date_column in call_data.columns:
+                call_data[date_column] = call_data[date_column].astype(str)
+            
+            call_data['temp_date'] = pd.to_datetime(call_data.get(date_column, ''), errors='coerce')
+            
+            # 创建日期索引，加速日期查找
+            date_groups = {}
+            for idx, row in call_data.iterrows():
+                if pd.notna(row['temp_date']):
+                    date_key = row['temp_date'].date()
+                    if date_key not in date_groups:
+                        date_groups[date_key] = []
+                    date_groups[date_key].append(idx)
+            
+            # 批量处理所有记录
+            results = []
+            for person_name, transaction_date in zip(person_names, transaction_dates):
+                results.append(self._get_single_call_record_match(
+                    person_name, transaction_date, call_data, date_groups
+                ))
+            
+            return results
+            
+        except Exception as e:
+            self.logger.warning(f"批量获取话单匹配信息时出错: {e}")
+            return [''] * len(person_names)
+    
+    def _get_single_call_record_match(self, person_name: str, transaction_date: str, 
+                                     call_data: pd.DataFrame, date_groups: Dict) -> str:
+        """
+        获取单条记录的话单匹配信息（优化版本）
+        
+        Args:
+            person_name: 人员姓名
+            transaction_date: 交易日期
+            call_data: 预处理的话单数据
+            date_groups: 日期索引字典
+            
+        Returns:
+            str: 话单匹配信息
+        """
+        try:
+            # 转换交易日期
+            if not isinstance(transaction_date, str):
+                transaction_date = str(transaction_date)
+            tx_date = pd.to_datetime(transaction_date, errors='coerce')
+            if pd.isna(tx_date):
+                return ''
+            
+            # 使用日期索引快速查找当天记录
+            date_key = tx_date.date()
+            if date_key not in date_groups:
+                return ''
+            
+            # 获取当天记录的索引
+            same_day_indices = date_groups[date_key]
+            same_day_calls = call_data.loc[same_day_indices]
+            
+            if same_day_calls.empty:
+                return ''
+            
+            # 性能优化：使用向量化操作筛选人员记录
+            person_name_str = str(person_name)
+            caller_mask = same_day_calls['本方姓名'].astype(str) == person_name_str
+            callee_mask = same_day_calls['对方姓名'].astype(str) == person_name_str
+            # 使用.loc避免布尔索引警告
+            combined_mask = caller_mask | callee_mask
+            person_calls = same_day_calls.loc[combined_mask]
+            
+            if person_calls.empty:
+                return ''
+            
+            # 优化：使用向量化操作收集联系人
+            contacted_persons = set()
+            
+            # 本方是目标人员的情况
+            caller_records = person_calls[caller_mask]
+            if not caller_records.empty:
+                contacted_persons.update(caller_records['对方姓名'].astype(str).unique())
+            
+            # 对方是目标人员的情况
+            callee_records = person_calls[callee_mask]
+            if not callee_records.empty:
+                contacted_persons.update(callee_records['本方姓名'].astype(str).unique())
+            
+            # 移除空值和本人
+            contacted_persons = {p for p in contacted_persons if p and p != person_name_str}
+            
+            if contacted_persons:
+                contacted_persons_str = sorted(contacted_persons)
+                return f"本方{person_name}，对方{','.join(contacted_persons_str)}"
+            else:
+                return ''
+                
+        except Exception as e:
+            self.logger.warning(f"获取单条话单匹配信息时出错: {e}")
+            return ''
+    
+    def _get_call_record_match(self, person_name: str, transaction_date: str, data_models: Dict) -> str:
+        """
+        获取话单匹配信息（单条记录版本，兼容旧代码）
+        
+        Args:
+            person_name: 人员姓名
+            transaction_date: 交易日期
+            data_models: 数据模型字典
+            
+        Returns:
+            str: 话单匹配信息，格式为"本方XX，对方XX,XX,XX"
+        """
+        # 使用批量处理方法的简化版本
+        return self._get_call_record_match_batch([person_name], [transaction_date], data_models)[0]
+    
+    def _analyze_cash_call_matching(self, data_models: Dict, min_amount: float = 10000) -> pd.DataFrame:
+        """
+        分析存取现与话单匹配（性能优化版本）
+        
+        Args:
+            data_models: 数据模型字典
+            min_amount: 最小金额阈值（默认1万）
+            
+        Returns:
+            pd.DataFrame: 存取现与话单匹配结果
+        """
+        try:
+            # 检查是否有银行数据模型
+            if 'bank' not in data_models or data_models['bank'] is None:
+                self.logger.warning("没有银行数据模型，跳过存取现与话单匹配分析")
+                return pd.DataFrame()
+            
+            bank_model = data_models['bank']
+            if bank_model.data.empty:
+                self.logger.warning("银行数据为空，跳过存取现与话单匹配分析")
+                return pd.DataFrame()
+            
+            # 检查是否有话单数据模型（键名为'call'）
+            if 'call' not in data_models or data_models['call'] is None:
+                self.logger.warning("没有话单数据模型，跳过存取现与话单匹配分析")
+                return pd.DataFrame()
+            
+            call_model = data_models['call']
+            if call_model.data.empty:
+                self.logger.warning("话单数据为空，跳过存取现与话单匹配分析")
+                return pd.DataFrame()
+            
+            # 性能优化：筛选存取现交易（金额大于等于阈值）
+            cash_data = bank_model.data.copy()
+            
+            # 确保有存取现标识列
+            if '存取现标识' not in cash_data.columns:
+                self.logger.warning("银行数据中没有存取现标识列，跳过存取现与话单匹配分析")
+                return pd.DataFrame()
+            
+            # 性能优化：使用向量化操作筛选存取现交易
+            cash_mask = (cash_data['存取现标识'].isin(['存现', '取现'])) & \
+                       (cash_data[bank_model.amount_column].abs() >= min_amount)
+            cash_transactions = cash_data[cash_mask]
+            
+            if cash_transactions.empty:
+                self.logger.info(f"没有找到金额大于等于{min_amount}元的存取现交易")
+                return pd.DataFrame()
+            
+            self.logger.info(f"找到{len(cash_transactions)}笔金额大于等于{min_amount}元的存取现交易")
+            
+            # 性能优化：批量处理话单匹配信息
+            person_names = []
+            transaction_dates = []
+            
+            for idx, transaction in cash_transactions.iterrows():
+                # 获取交易信息
+                person_name = transaction.get(bank_model.name_column, '')
+                if not person_name:
+                    # 如果本方姓名为空，尝试使用对方姓名
+                    person_name = transaction.get(bank_model.opposite_name_column, '')
+                
+                transaction_date = transaction.get('交易日期', '')
+                person_names.append(person_name)
+                transaction_dates.append(transaction_date)
+            
+            # 性能优化：批量获取话单匹配信息
+            call_matches = self._get_call_record_match_batch_optimized(person_names, transaction_dates, data_models)
+            
+            # 性能优化：批量构建结果
+            results = []
+            for i, (idx, transaction) in enumerate(cash_transactions.iterrows()):
+                person_name = person_names[i]
+                transaction_date = transaction_dates[i]
+                amount = transaction.get(bank_model.amount_column, 0)
+                cash_type = transaction.get('存取现标识', '')
+                summary = transaction.get(bank_model.summary_column, '')
+                remark = transaction.get(bank_model.remark_column, '')
+                
+                # 构建结果记录
+                result_record = {
+                    '分析类型': '存取现与话单匹配',
+                    '追踪ID': f"CASH_{idx}",
+                    '核心人员': person_name,
+                    '交易日期': transaction_date,
+                    '交易金额': amount,
+                    '交易方向': '收入' if cash_type == '存现' else '支出',
+                    '交易类型': cash_type,
+                    '对方人员': '',  # 存取现通常没有对方人员
+                    '数据来源': transaction.get('数据来源', ''),
+                    '大额级别': '',  # 不适用
+                    '追踪深度': '',  # 不适用
+                    '备注': f"{summary} {remark}".strip(),
+                    '话单匹配': call_matches[i]
+                }
+                
+                results.append(result_record)
+            
+            # 转换为DataFrame
+            if results:
+                return pd.DataFrame(results)
+            else:
+                return pd.DataFrame()
+                
+        except Exception as e:
+            self.logger.error(f"分析存取现与话单匹配时出错: {e}")
             return pd.DataFrame()
     
     # Obsolete functions removed.

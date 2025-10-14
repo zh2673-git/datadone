@@ -563,8 +563,17 @@ class FundTrackingEngine:
             # 确定大额级别
             amount_level = self._get_amount_level(abs(amount))
             
+            # 优化数据来源显示：如果是银行数据，显示具体银行名称
+            source_display = data_source
+            # 检查是否为银行数据（数据源名称为'bank'或包含'银行'）
+            if data_source == 'bank' or '银行' in data_source:
+                # 尝试从数据中提取具体的银行名称
+                bank_name = self._extract_bank_name_from_row(row)
+                if bank_name and bank_name != '未知银行':
+                    source_display = bank_name
+            
             result_data.append({
-                '数据来源': data_source,
+                '数据来源': source_display,
                 '交易日期': row[date_col] if date_col in row else '未知',
                 '本方姓名': person_name,
                 '对方姓名': opposite_person,
@@ -575,6 +584,94 @@ class FundTrackingEngine:
             })
         
         return pd.DataFrame(result_data)
+    
+    def _extract_bank_name_from_row(self, row: pd.Series) -> str:
+        """
+        从数据行中提取银行名称
+        
+        Parameters:
+        -----------
+        row : pd.Series
+            数据行
+            
+        Returns:
+        --------
+        str
+            银行名称
+        """
+        # 优先从银行类型列中提取
+        bank_columns = ['银行类型', '银行名称', '交易机构名称', '对方银行名称']
+        
+        for col in bank_columns:
+            if col in row and pd.notna(row[col]) and str(row[col]).strip():
+                bank_name = str(row[col]).strip()
+                # 如果银行名称包含银行信息，直接返回
+                if '银行' in bank_name:
+                    return bank_name
+        
+        # 如果从列名中无法提取，尝试从账号中提取
+        account_columns = ['账号', '银行卡号', '对方账号']
+        for col in account_columns:
+            if col in row and pd.notna(row[col]) and str(row[col]).strip():
+                account = str(row[col]).strip()
+                # 根据银行卡号前缀判断银行
+                bank_name = self._extract_bank_from_account(account)
+                if bank_name != '未知银行':
+                    return bank_name
+        
+        return '未知银行'
+    
+    def _extract_bank_from_account(self, account: str) -> str:
+        """
+        从账号中提取银行名称
+        
+        Parameters:
+        -----------
+        account : str
+            账号
+            
+        Returns:
+        --------
+        str
+            银行名称
+        """
+        if not account or not isinstance(account, str):
+            return "未知银行"
+        
+        # 常见银行卡号前缀映射
+        bank_prefixes = {
+            '622848': '农业银行',
+            '622700': '建设银行',
+            '621700': '建设银行',
+            '621661': '建设银行',
+            '621226': '工商银行',
+            '622202': '工商银行',
+            '622262': '交通银行',
+            '622666': '中国银行',
+            '622622': '中国银行',
+            '622588': '招商银行',
+            '621286': '招商银行',
+            '622155': '浦发银行',
+            '622169': '浦发银行',
+            '622516': '浦发银行',
+            '622916': '民生银行',
+            '622918': '民生银行',
+            '622909': '兴业银行',
+            '622908': '兴业银行',
+            '621095': '邮政储蓄银行',
+            '620062': '邮政储蓄银行',
+            '623218': '邮政储蓄银行',
+            '6217002': '建设银行',
+            '6227002': '建设银行',
+            '4367422': '建设银行'
+        }
+        
+        # 尝试从账号中提取银行名称
+        for prefix, bank in bank_prefixes.items():
+            if str(account).startswith(prefix):
+                return bank
+        
+        return "未知银行"
     
     def _get_amount_level(self, amount: float) -> str:
         """

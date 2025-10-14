@@ -2066,6 +2066,7 @@ class ExcelExporter(BaseExporter):
                 formatted_df['追踪ID'] = [f"TRK{i:04d}" for i in range(len(tracking_results))]
                 
                 # 性能优化：使用map替代apply进行交易类型转换
+                # 注意：这里只转换交易类型，不覆盖数据来源字段中的具体银行名称
                 transaction_type_map = {
                     '银行': '银行',
                     '微信': '微信', 
@@ -2074,6 +2075,9 @@ class ExcelExporter(BaseExporter):
                 formatted_df['交易类型'] = formatted_df['数据来源'].map(
                     lambda x: transaction_type_map.get(x, x) if any(keyword in x for keyword in ['银行', '微信', '支付宝']) else x
                 )
+                
+                # 确保数据来源字段保持原样（包含具体的银行名称）
+                # 不进行任何转换，直接使用fund_tracking.py中设置的银行名称
                 
                 formatted_df['话单匹配'] = call_matches
                 
@@ -2204,9 +2208,10 @@ class ExcelExporter(BaseExporter):
                 person_name_str = str(person_name)
                 caller_mask = same_day_calls['本方姓名'].astype(str) == person_name_str
                 callee_mask = same_day_calls['对方姓名'].astype(str) == person_name_str
-                # 使用.loc避免布尔索引警告
+                # 修复Boolean Series reindexed警告：确保布尔索引与DataFrame索引对齐
                 combined_mask = caller_mask | callee_mask
-                person_calls = same_day_calls.loc[combined_mask]
+                # 使用.reset_index(drop=True)确保索引对齐
+                person_calls = same_day_calls.loc[combined_mask.values] if len(combined_mask) == len(same_day_calls) else same_day_calls[combined_mask]
                 
                 if person_calls.empty:
                     results.append('')
@@ -2334,9 +2339,10 @@ class ExcelExporter(BaseExporter):
             person_name_str = str(person_name)
             caller_mask = same_day_calls['本方姓名'].astype(str) == person_name_str
             callee_mask = same_day_calls['对方姓名'].astype(str) == person_name_str
-            # 使用.loc避免布尔索引警告
+            # 修复Boolean Series reindexed警告：确保布尔索引与DataFrame索引对齐
             combined_mask = caller_mask | callee_mask
-            person_calls = same_day_calls.loc[combined_mask]
+            # 使用.reset_index(drop=True)确保索引对齐
+            person_calls = same_day_calls.loc[combined_mask.values] if len(combined_mask) == len(same_day_calls) else same_day_calls[combined_mask]
             
             if person_calls.empty:
                 return ''
@@ -2462,6 +2468,11 @@ class ExcelExporter(BaseExporter):
                 remark = transaction.get(bank_model.remark_column, '')
                 
                 # 构建结果记录
+                # 优先使用银行名称字段，如果不存在则使用数据来源字段
+                bank_name = transaction.get('银行类型', transaction.get('银行名称', transaction.get('交易机构名称', '')))
+                if not bank_name or bank_name == '':
+                    bank_name = transaction.get('数据来源', '')
+                
                 result_record = {
                     '分析类型': '存取现与话单匹配',
                     '追踪ID': f"CASH_{idx}",
@@ -2471,7 +2482,7 @@ class ExcelExporter(BaseExporter):
                     '交易方向': '收入' if cash_type == '存现' else '支出',
                     '交易类型': cash_type,
                     '对方人员': '',  # 存取现通常没有对方人员
-                    '数据来源': transaction.get('数据来源', ''),
+                    '数据来源': bank_name,  # 使用具体的银行名称而不是文件名称
                     '大额级别': '',  # 不适用
                     '追踪深度': '',  # 不适用
                     '备注': f"{summary} {remark}".strip(),

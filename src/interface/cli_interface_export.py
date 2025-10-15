@@ -53,7 +53,7 @@ def export_to_excel(self):
 
 def generate_word_report(self):
     """
-    生成统一的综合分析Word报告
+    生成统一的综合分析Word报告（支持新旧版本选择）
     """
     self.display_message("\n生成综合分析报告 (Word)")
     self.display_message("-" * 20)
@@ -62,18 +62,33 @@ def generate_word_report(self):
         self.display_error("没有可用的分析器，无法生成报告。请先加载数据。")
         return
     
+    # 选择报告版本
+    version_options = ["旧版报告", "新版报告"]
+    version_choice = self.get_multiple_choice(version_options, prompt="请选择报告版本", multiple=False)
+    report_version = "old" if version_choice == 0 else "new"
+    
     default_title = f"综合分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     report_title = self.get_input(f"请输入报告标题 (默认为: {default_title})") or default_title
     
     try:
         self.display_message("正在生成报告，这可能需要一些时间...")
         
-        # WordExporter的实例化应在主程序逻辑中完成，这里直接使用self.word_exporter
-        self.word_exporter.generate_comprehensive_report(
-            report_title=report_title,
-            data_models=self.data_models,
-            analyzers=self.analyzers
-        )
+        if report_version == "old":
+            # 使用旧版WordExporter
+            self.word_exporter.generate_comprehensive_report(
+                report_title=report_title,
+                data_models=self.data_models,
+                analyzers=self.analyzers
+            )
+        else:
+            # 使用新版WordExporter
+            from src.export.word_exporter_new import NewWordExporter
+            new_word_exporter = NewWordExporter(output_dir=self.output_dir, config=self.config)
+            new_word_exporter.generate_comprehensive_report(
+                report_title=report_title,
+                data_models=self.data_models,
+                analyzers=self.analyzers
+            )
         # 成功信息已在exporter内部打印
     except Exception as e:
         self.display_error(f"生成Word报告时发生未知错误: {str(e)}")

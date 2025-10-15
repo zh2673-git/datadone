@@ -12,7 +12,7 @@ from src.base import BaseDataModel
 from src.datasource import BankDataModel, CallDataModel, WeChatDataModel, AlipayDataModel
 from src.group import GroupManager
 from src.analysis import BankAnalyzer, CallAnalyzer, WeChatAnalyzer, AlipayAnalyzer, ComprehensiveAnalyzer
-from src.export import ExcelExporter, WordExporter
+from src.export import ExcelExporter, WordExporter, NewWordExporter
 
 from .base_interface import BaseInterface
 from .cli_interface_group import *
@@ -51,10 +51,11 @@ class CommandLineInterface(BaseInterface):
         
         # 初始化配置
         self.config = config or Config()
+        self.output_dir = self.config.get('export.default_output_dir', 'output')
 
         # 初始化导出器
-        self.excel_exporter = ExcelExporter(config=self.config)
-        self.word_exporter = WordExporter(config=self.config)
+        self.excel_exporter = ExcelExporter(output_dir=self.output_dir, config=self.config)
+        self.word_exporter = WordExporter(output_dir=self.output_dir, config=self.config)
         self.logger = logging.getLogger('main')
         
         # 初始化缓存管理器

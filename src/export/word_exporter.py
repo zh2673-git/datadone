@@ -704,9 +704,15 @@ class WordExporter:
         # 计算主要时间集中
         person_data = person_data.copy()
         # 安全地格式化日期，避免非日期类型数据
-        person_data['年份月份'] = person_data[data_model.date_column].apply(
-            lambda x: x.strftime('%Y年%m月') if hasattr(x, 'strftime') else '未知日期'
-        )
+        def _safe_fmt_ym(val):
+            try:
+                dt = pd.to_datetime(val, errors='coerce')
+                if pd.isna(dt):
+                    return '未知日期'
+                return dt.strftime('%Y年%m月')
+            except Exception:
+                return '未知日期'
+        person_data['年份月份'] = person_data[data_model.date_column].apply(_safe_fmt_ym)
         monthly_counts = person_data.groupby('年份月份').size().reset_index(name='次数')
         top_months = monthly_counts.nlargest(3, '次数')
         major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
@@ -799,9 +805,15 @@ class WordExporter:
         if cash_type == '存现':
             # 计算主要时间集中
             # 安全地格式化日期，避免非日期类型数据
-            person_cash_data['年份月份'] = person_cash_data[bank_model.date_column].apply(
-                lambda x: x.strftime('%Y年%m月') if hasattr(x, 'strftime') else '未知日期'
-            )
+            def _safe_fmt_ym2(val):
+                try:
+                    dt = pd.to_datetime(val, errors='coerce')
+                    if pd.isna(dt):
+                        return '未知日期'
+                    return dt.strftime('%Y年%m月')
+                except Exception:
+                    return '未知日期'
+            person_cash_data['年份月份'] = person_cash_data[bank_model.date_column].apply(_safe_fmt_ym2)
             monthly_counts = person_cash_data.groupby('年份月份').size().reset_index(name='次数')
             top_months = monthly_counts.nlargest(3, '次数')
             major_time_str = ", ".join([f"{row['年份月份']} ({row['次数']}次)" for _, row in top_months.iterrows()])
@@ -845,7 +857,11 @@ class WordExporter:
 
                 for _, row in top_5_transactions.iterrows():
                     row_cells = table.add_row().cells
-                    row_cells[0].text = row[bank_model.date_column].strftime('%Y-%m-%d')
+                    try:
+                        dt = pd.to_datetime(row[bank_model.date_column], errors='coerce')
+                        row_cells[0].text = dt.strftime('%Y-%m-%d') if pd.notna(dt) else '未知日期'
+                    except Exception:
+                        row_cells[0].text = '未知日期'
                     
                     amount = row[bank_model.amount_column]
                     amount_p = row_cells[1].paragraphs[0]

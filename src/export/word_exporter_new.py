@@ -60,6 +60,9 @@ class NewWordExporter:
             self._save_document(doc, report_title)
             return
 
+        # 预构建“重点人员”相关缓存，避免逐人重复计算
+        self._build_key_persons_caches(data_models, persons_with_financials)
+
         # 为每个人员生成分析报告
         update_progress("生成个人分析报告")
         for i, person_name in enumerate(persons_with_financials):
@@ -93,7 +96,7 @@ class NewWordExporter:
             
             # 四、重点人员分析
             print(f"    4/4 重点人员分析...")
-            self._generate_key_persons_analysis(doc, data_models, analyzers)
+            self._generate_key_persons_analysis(doc, person_name, data_models)
 
         update_progress("保存Word文档")
         self._save_document(doc, report_title)
@@ -1338,25 +1341,232 @@ class NewWordExporter:
                     p.add_run(f"，其中{'、'.join(expense_details)}")
             p.add_run("；")
 
-    def _generate_key_persons_analysis(self, doc: Document, data_models: Dict, analyzers: Dict):
-        """生成重点人员分析（参考Excel报告逻辑，性能优化版本）"""
+    def _generate_key_persons_analysis(self, doc: Document, person_name: str, data_models: Dict):
+        """生成重点人员分析（按人生成，列举名单并显示单位信息）"""
         doc.add_heading("四、重点人员", level=3)
-        
-        # 性能优化：预计算和缓存数据
-        print("    预计算重点人员数据...")
-        self._precompute_key_persons_data(data_models)
-        
-        # 1. 存取现与话单匹配的人员
-        print("    生成存取现与话单匹配分析...")
-        self._generate_cash_call_matching_persons(doc, data_models)
-        
-        # 2. 大额资金跟踪与话单匹配的人员
-        print("    生成大额资金跟踪分析...")
-        self._generate_large_fund_call_matching_persons(doc, data_models)
-        
-        # 3. 大额资金跟踪层级区分的重点人员
-        print("    生成重点人员层级分析...")
-        self._generate_large_fund_tracking_persons(doc, data_models)
+
+        # 读取缓存
+        cached = getattr(self, '_cached_data', {})
+        person_day_contacts = cached.get('person_day_contacts', {})
+        person_cash_dates = cached.get('person_cash_dates', {})
+        person_large_dates = cached.get('person_large_dates', {})
+        tracking_df = cached.get('tracking_df')
+
+        # 1) 存取现与话单匹配的人员：存取现当天与该人有通联的对手名单（去重），显示单位
+        p1 = doc.add_paragraph()
+        p1.add_run("1.存取现与话单匹配的人员：").bold = True
+        cash_contacts: List[str] = []
+        dates = person_cash_dates.get(person_name, set())
+        day_map = person_day_contacts.get(person_name, {})
+        for d in dates:
+            contacts = day_map.get(d, set())
+            if contacts:
+                cash_contacts.extend(list(contacts))
+        cash_contacts = sorted(list(set([x for x in cash_contacts if x and str(x).strip()])))
+        if cash_contacts:
+            display_items = []
+            for nm in cash_contacts:
+                unit = self._get_unit_cached(nm, data_models)
+                if unit:
+                    display_items.append(f"{nm}（{unit}）")
+                else:
+                    display_items.append(nm)
+            p1.add_run(f"存取现当天有通联的有{'、'.join(display_items)}等；")
+        else:
+            p1.add_run("未发现存取现与话单匹配的人员；")
+
+        # 2) 大额资金跟踪与话单匹配的人员：发生大额资金当天与该人有通联的对手名单（去重），显示单位
+        p2 = doc.add_paragraph()
+        p2.add_run("2.大额资金跟踪与话单匹配的人员：").bold = True
+        large_contacts: List[str] = []
+        ldates = person_large_dates.get(person_name, set())
+        for d in ldates:
+            contacts = day_map.get(d, set())
+            if contacts:
+                large_contacts.extend(list(contacts))
+        large_contacts = sorted(list(set([x for x in large_contacts if x and str(x).strip()])))
+        if large_contacts:
+            display_items = []
+            for nm in large_contacts:
+                unit = self._get_unit_cached(nm, data_models)
+                if unit:
+                    display_items.append(f"{nm}（{unit}）")
+                else:
+                    display_items.append(nm)
+            p2.add_run(f"发生大额资金当天与话单匹配的人员有{'、'.join(display_items)}等；")
+        else:
+            p2.add_run("未发现大额资金与话单匹配的人员；")
+
+        # 3) 大额资金跟踪层级区分的重点人员：使用FundTrackingEngine，分层列举关联人员及通过对象
+        p3 = doc.add_paragraph()
+        p3.add_run("3.大额资金跟踪层级区分的重点人员：").bold = True
+        try:
+            if tracking_df is None or tracking_df.empty:
+                p3.add_run("未发现大额资金跟踪层级区分的重点人员；")
+            else:
+                dfp = tracking_df.copy()
+                dfp = dfp[(dfp['核心人员'] == person_name) & (dfp['关联人员'].notna()) & (dfp['关联人员'] != '月度汇总')]
+                if dfp.empty:
+                    p3.add_run("未发现大额资金跟踪层级区分的重点人员；")
+                else:
+                    # 解析“通过X间接追踪”中的X
+                    def extract_via(text: str) -> List[str]:
+                        try:
+                            s = str(text)
+                            if '通过' in s and '间接追踪' in s:
+                                mid = s.split('通过', 1)[1]
+                                mid = mid.split('间接追踪', 1)[0]
+                                # 可能包含多个名字，用非字母数字分割
+                                parts = [x.strip() for x in mid.replace('：', '').replace(':', '').replace('，', '、').split('、') if x.strip()]
+                                return parts
+                            return []
+                        except Exception:
+                            return []
+
+                    lines = []
+                    for level in [0, 1, 2]:
+                        sub = dfp[dfp['追踪层级'] == level]
+                        if sub.empty:
+                            continue
+                        # 针对同一关联人员聚合via名单
+                        grouped = {}
+                        for _, row in sub.iterrows():
+                            assoc = str(row['关联人员']).strip()
+                            if not assoc:
+                                continue
+                            grouped.setdefault(assoc, set()).update(extract_via(row.get('追踪说明', '')))
+                        if not grouped:
+                            continue
+                        items = []
+                        for assoc, via_set in grouped.items():
+                            unit = self._get_unit_cached(assoc, data_models)
+                            assoc_disp = f"{assoc}（{unit}）" if unit else assoc
+                            if level == 0:
+                                items.append(assoc_disp)
+                            elif level == 1:
+                                if via_set:
+                                    via_list = []
+                                    for v in sorted(via_set):
+                                        vu = self._get_unit_cached(v, data_models)
+                                        via_list.append(f"{v}（{vu}）" if vu else v)
+                                    items.append(f"{assoc_disp}，通过{'、'.join(via_list)}跟踪")
+                                else:
+                                    items.append(assoc_disp)
+                            else:  # level == 2
+                                if via_set:
+                                    via_list = []
+                                    for v in sorted(via_set):
+                                        vu = self._get_unit_cached(v, data_models)
+                                        via_list.append(f"{v}（{vu}）" if vu else v)
+                                    items.append(f"{assoc_disp}，通过{'、'.join(via_list)}跟踪")
+                                else:
+                                    items.append(assoc_disp)
+                        if items:
+                            lines.append(f"跟踪层级为{level}的人员有{'、'.join(items)}")
+                    if lines:
+                        p3.add_run("；".join(lines) + "；")
+                    else:
+                        p3.add_run("未发现大额资金跟踪层级区分的重点人员；")
+        except Exception as e:
+            p3.add_run(f"分析出错: {str(e)}")
+
+    def _build_key_persons_caches(self, data_models: Dict, persons: List[str]):
+        """预构建重点人员相关缓存，降低逐人分析的重复计算开销"""
+        if not hasattr(self, '_cached_data'):
+            self._cached_data = {}
+
+        # 1) 话单数据按人按日的联系人索引 person -> {date -> set(contacts)}
+        person_day_contacts: Dict[str, Dict] = {}
+        call_df = None
+        if data_models.get('call') and data_models['call'] and not data_models['call'].data.empty:
+            call_df = data_models['call'].data.copy()
+            if '呼叫日期' in call_df.columns:
+                call_df.loc[:, '呼叫日期'] = pd.to_datetime(call_df['呼叫日期'], errors='coerce', format='mixed')
+                call_df.loc[:, 'date_key'] = call_df['呼叫日期'].dt.date
+                for _, row in call_df.iterrows():
+                    d = row.get('date_key')
+                    a = row.get('本方姓名')
+                    b = row.get('对方姓名')
+                    if pd.isna(d) or not d:
+                        continue
+                    # 双向建立
+                    if isinstance(a, str) and a.strip() and isinstance(b, str) and b.strip():
+                        a = a.strip(); b = b.strip()
+                        if a not in person_day_contacts:
+                            person_day_contacts[a] = {}
+                        if d not in person_day_contacts[a]:
+                            person_day_contacts[a][d] = set()
+                        person_day_contacts[a][d].add(b)
+                        if b not in person_day_contacts:
+                            person_day_contacts[b] = {}
+                        if d not in person_day_contacts[b]:
+                            person_day_contacts[b][d] = set()
+                        person_day_contacts[b][d].add(a)
+
+        self._cached_data['person_day_contacts'] = person_day_contacts
+
+        # 2) 每人存取现日期集合
+        person_cash_dates: Dict[str, set] = {p: set() for p in persons}
+        for dtype in ['bank', 'wechat', 'alipay']:
+            model = data_models.get(dtype)
+            if model and not model.data.empty and '存取现标识' in model.data.columns and hasattr(model, 'date_column') and hasattr(model, 'name_column'):
+                df = model.data[model.data['存取现标识'].isin(['存现', '取现'])].copy()
+                if df.empty or model.date_column not in df.columns:
+                    continue
+                df.loc[:, model.date_column] = pd.to_datetime(df[model.date_column], errors='coerce')
+                df = df.dropna(subset=[model.date_column])
+                df.loc[:, 'date_key'] = df[model.date_column].dt.date
+                for p in persons:
+                    mask = df[model.name_column] == p
+                    dates = df.loc[mask, 'date_key'].dropna().unique().tolist()
+                    if dates:
+                        person_cash_dates[p].update(dates)
+        self._cached_data['person_cash_dates'] = person_cash_dates
+
+        # 3) 每人大额交易日期集合（按最小大额阈值）
+        min_large = FundTrackingEngine(self.config).min_large_amount
+        person_large_dates: Dict[str, set] = {p: set() for p in persons}
+        for dtype in ['bank', 'wechat', 'alipay']:
+            model = data_models.get(dtype)
+            if model and not model.data.empty and hasattr(model, 'amount_column') and hasattr(model, 'date_column') and hasattr(model, 'name_column'):
+                df = model.data.copy()
+                if model.amount_column not in df.columns or model.date_column not in df.columns:
+                    continue
+                df.loc[:, model.amount_column] = pd.to_numeric(df[model.amount_column], errors='coerce')
+                df.loc[:, model.date_column] = pd.to_datetime(df[model.date_column], errors='coerce')
+                df = df.dropna(subset=[model.date_column])
+                df = df[df[model.amount_column].abs() >= min_large]
+                if df.empty:
+                    continue
+                df.loc[:, 'date_key'] = df[model.date_column].dt.date
+                for p in persons:
+                    mask = df[model.name_column] == p
+                    dates = df.loc[mask, 'date_key'].dropna().unique().tolist()
+                    if dates:
+                        person_large_dates[p].update(dates)
+        self._cached_data['person_large_dates'] = person_large_dates
+
+        # 4) 大额资金追踪结果（一次性）
+        try:
+            tracker = FundTrackingEngine(self.config)
+            tracking_df = tracker.track_large_funds(data_models)
+        except Exception:
+            tracking_df = None
+        self._cached_data['tracking_df'] = tracking_df
+
+        # 5) 单位信息缓存
+        self._cached_data['unit_cache'] = {}
+
+    def _get_unit_cached(self, name: str, data_models: Dict) -> str:
+        """带缓存的单位信息获取"""
+        if not hasattr(self, '_cached_data'):
+            self._cached_data = {}
+        unit_cache = self._cached_data.setdefault('unit_cache', {})
+        if name in unit_cache:
+            return unit_cache[name]
+        unit = self._extract_unit_info_from_call_data(name, data_models)
+        unit_cache[name] = unit
+        return unit
 
     def _precompute_key_persons_data(self, data_models: Dict):
         """预计算重点人员分析所需的数据，提升性能"""

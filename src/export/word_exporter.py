@@ -21,6 +21,16 @@ class WordExporter:
         """
         生成统一的、以人为核心的综合分析报告。
         """
+        print("开始生成旧版Word报告...")
+        total_steps = 5
+        current_step = 0
+        
+        def update_progress(step_name):
+            nonlocal current_step
+            current_step += 1
+            progress = (current_step / total_steps) * 100
+            print(f"[{current_step}/{total_steps}] {step_name}... ({progress:.1f}%)")
+        
         self.data_models = data_models
         
         doc = Document()
@@ -37,12 +47,20 @@ class WordExporter:
             return
 
         # 1. 基本信息 (全局)
+        update_progress("生成基本信息")
         self.generate_global_basic_info(doc, persons_with_financials, data_models)
 
         # 2. 个人详细分析
+        update_progress("生成个人详细分析")
         doc.add_heading('二、个人详细分析', level=2)
         doc.add_paragraph("本章节仅针对持有金融账户的个人进行详细分析。")
+        
+        # 性能优化：预计算个人分析数据
+        print("  预计算个人分析数据...")
+        self._precompute_person_analysis_data(persons_with_financials, data_models, analyzers)
+        
         for i, person_name in enumerate(persons_with_financials):
+            print(f"  正在分析 {person_name} ({i+1}/{len(persons_with_financials)})")
             doc.add_heading(f'（{self._to_chinese_numeral(i + 1)}）{person_name}的综合分析', level=3)
             
             # 生成各类型的详细分析内容
@@ -57,9 +75,55 @@ class WordExporter:
 
         # 3. 综合交叉分析
         if analyzers.get('comprehensive'):
+            update_progress("生成综合交叉分析")
             self.generate_comprehensive_cross_analysis_section(doc, analyzers)
 
+        update_progress("保存Word文档")
         self._save_document(doc, report_title)
+
+    def _precompute_person_analysis_data(self, persons: List[str], data_models: Dict, analyzers: Dict):
+        """预计算个人分析数据，提升性能"""
+        # 创建缓存属性
+        if not hasattr(self, '_person_cache'):
+            self._person_cache = {}
+        
+        # 预计算每个人员的数据
+        for person in persons:
+            if person not in self._person_cache:
+                self._person_cache[person] = {}
+                
+                # 预计算银行数据
+                if data_models.get('bank') and not data_models['bank'].data.empty:
+                    bank_data = data_models['bank'].data[
+                        data_models['bank'].data['本方姓名'] == person
+                    ]
+                    if not bank_data.empty:
+                        self._person_cache[person]['bank'] = bank_data
+                
+                # 预计算微信数据
+                if data_models.get('wechat') and not data_models['wechat'].data.empty:
+                    wechat_data = data_models['wechat'].data[
+                        data_models['wechat'].data['本方姓名'] == person
+                    ]
+                    if not wechat_data.empty:
+                        self._person_cache[person]['wechat'] = wechat_data
+                
+                # 预计算支付宝数据
+                if data_models.get('alipay') and not data_models['alipay'].data.empty:
+                    alipay_data = data_models['alipay'].data[
+                        data_models['alipay'].data['本方姓名'] == person
+                    ]
+                    if not alipay_data.empty:
+                        self._person_cache[person]['alipay'] = alipay_data
+                
+                # 预计算话单数据
+                if data_models.get('call') and not data_models['call'].data.empty:
+                    call_data = data_models['call'].data[
+                        (data_models['call'].data['本方姓名'] == person) |
+                        (data_models['call'].data['对方姓名'] == person)
+                    ]
+                    if not call_data.empty:
+                        self._person_cache[person]['call'] = call_data
 
     def _collect_person_summary_data(self, person_name: str, analyzers: Dict) -> Dict:
         """收集个人总结所需的数据"""

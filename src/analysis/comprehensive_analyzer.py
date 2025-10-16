@@ -15,6 +15,7 @@ from src.analysis.bank_analyzer import BankAnalyzer
 from src.analysis.call_analyzer import CallAnalyzer
 from src.analysis.payment.wechat_analyzer import WeChatAnalyzer
 from src.analysis.payment.alipay_analyzer import AlipayAnalyzer
+from src.utils.performance_cache import get_cache
 
 
 class ComprehensiveAnalyzer:
@@ -39,6 +40,9 @@ class ComprehensiveAnalyzer:
         self.group_manager = group_manager
         self.config = config or {}
         self.logger = logging.getLogger(self.__class__.__name__)
+        
+        # 初始化缓存
+        self.cache = get_cache()
         self.bank_analyzer = BankAnalyzer(
             self.data_models.get('bank'), self.group_manager, self.config
         ) if self.data_models.get('bank') else None
@@ -241,42 +245,37 @@ class ComprehensiveAnalyzer:
         base_name_col = '本方姓名'
         match_key_col = '对方姓名'
 
-        # 预处理所有df，确保关键列存在
-        all_dfs = {base_type: base_df.copy()}
-        all_dfs.update({k: v.copy() for k, v in other_dfs.items()})
+        # 性能优化：避免不必要的DataFrame复制，只在需要时复制
+        all_dfs = {base_type: base_df}
+        all_dfs.update(other_dfs)
 
-        # 获取所有数据源中的单位和职务信息
+        # 性能优化：使用字典推导式和向量化操作收集单位信息
         company_position_map = {}
         for source_type, df in all_dfs.items():
-            if df is not None and not df.empty:
-                # 检查并获取对方单位和职务信息
-                unit_col = next(
-                    (col for col in df.columns if '对方单位名称_' in col), None)
-                position_col = next(
-                    (col for col in df.columns if '对方职务_' in col), None)
+            if df is None or df.empty:
+                continue
+                
+            # 检查并获取对方单位和职务信息
+            unit_col = next((col for col in df.columns if '对方单位名称_' in col), None)
+            position_col = next((col for col in df.columns if '对方职务_' in col), None)
 
-                if unit_col or position_col:
-                    # 按对方姓名分组，收集所有非空的单位和职务信息
-                    agg_dict = {}
-                    if unit_col:
-                        agg_dict[unit_col] = lambda x: '|'.join(
-                            sorted(set(x.dropna().astype(str))))
-                    if position_col:
-                        agg_dict[position_col] = lambda x: '|'.join(
-                            sorted(set(x.dropna().astype(str))))
+            if unit_col or position_col:
+                # 性能优化：使用向量化操作收集单位信息，避免iterrows
+                agg_dict = {}
+                if unit_col:
+                    agg_dict[unit_col] = lambda x: '|'.join(sorted(set(x.dropna().astype(str))))
+                if position_col:
+                    agg_dict[position_col] = lambda x: '|'.join(sorted(set(x.dropna().astype(str))))
 
-                    if agg_dict:
-                        group_data = df.groupby('对方姓名').agg(
-                            agg_dict).reset_index()
+                if agg_dict:
+                    group_data = df.groupby('对方姓名').agg(agg_dict).reset_index()
 
-                        # 更新映射字典
-                        for _, row in group_data.iterrows():
-                            name = row['对方姓名']
-                            if name not in company_position_map:
-                                company_position_map[name] = {
-                                    '对方单位': set(), '对方职务': set()}
+                    # 性能优化：使用向量化操作更新映射字典
+                    for name in group_data['对方姓名']:
+                        if name not in company_position_map:
+                            company_position_map[name] = {'对方单位': set(), '对方职务': set()}
 
-                            # 添加非空的单位信息
+                    # 添加非空的单位信息
                             if unit_col and pd.notna(row[unit_col]):
                                 units = row[unit_col].split('|')
                                 company_position_map[name]['对方单位'].update(

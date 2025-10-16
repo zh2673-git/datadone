@@ -75,15 +75,28 @@ class ExcelExporter(BaseExporter):
         # 获取完整文件路径
         filepath = self._get_file_path(filename, "xlsx")
         
+        # 进度显示
+        print("开始生成Excel报告...")
+        total_steps = 8
+        current_step = 0
+        
+        def update_progress(step_name):
+            nonlocal current_step
+            current_step += 1
+            progress = (current_step / total_steps) * 100
+            print(f"[{current_step}/{total_steps}] {step_name}... ({progress:.1f}%)")
+        
         try:
             # 性能优化：配置Excel写入器选项，提升大数据量写入性能
             with pd.ExcelWriter(filepath, engine='xlsxwriter') as writer:
                 # 获取话单数据中的对方单位信息
+                update_progress("提取单位信息")
                 company_position_map = {}
                 if include_unit_info and data_models and 'call' in data_models and data_models['call']:
                     company_position_map = self._extract_company_info(data_models['call'].data)
 
                 # 收集和分类分析结果
+                update_progress("分类分析结果")
                 advanced_analysis_dfs = []
                 frequency_analysis_dfs = []
                 other_results = {}
@@ -141,11 +154,13 @@ class ExcelExporter(BaseExporter):
 
                 # 1. 分析汇总表
                 if add_summaries:
+                    update_progress("生成分析汇总表")
                     self.logger.info("正在生成分析汇总表...")
                     self.add_comprehensive_summary_sheets(writer, data_models)
 
                 # 2. 频率表（账单类、话单类分开）
                 if frequency_analysis_dfs:
+                    update_progress("生成频率分析表")
                     # 分离话单类和账单类频率表
                     call_frequency_dfs = [df for df in frequency_analysis_dfs if df['平台'].iloc[0] == '话单']
                     bill_frequency_dfs = [df for df in frequency_analysis_dfs if df['平台'].iloc[0] != '话单']
@@ -196,15 +211,18 @@ class ExcelExporter(BaseExporter):
 
                     # 3. 综合分析表（交叉分析）
                     if call_frequency_dfs or bill_frequency_dfs:
+                        update_progress("生成综合分析表")
                         self._generate_comprehensive_analysis(writer, call_frequency_dfs, bill_frequency_dfs)
 
                 # 4. 平台原始数据表（银行分析原始、微信分析原始、支付宝分析原始）
                 if add_raw_data:
+                    update_progress("生成平台原始数据表")
                     self.logger.info("正在生成平台原始数据表...")
                     self.export_platform_raw_data(writer, data_models, analysis_results)
 
                 # 5. 高级分析表
                 if advanced_analysis_dfs:
+                    update_progress("生成高级分析表")
                     # 性能优化：使用更高效的DataFrame合并方式
                     combined_advanced_df = pd.concat(advanced_analysis_dfs, ignore_index=True, sort=False)
                     # 重新排列列的顺序，将数据来源放在前面
@@ -220,6 +238,7 @@ class ExcelExporter(BaseExporter):
 
                 # 6. 大额资金追踪表（新增功能）
                 if data_models:
+                    update_progress("生成大额资金跟踪表")
                     self.logger.info("正在生成大额资金追踪表...")
                     fund_tracking_df = self._generate_fund_tracking_sheet(data_models)
                     if not fund_tracking_df.empty:
@@ -235,6 +254,7 @@ class ExcelExporter(BaseExporter):
 
                 self.logger.info(f"已按指定顺序生成核心分析表格，共 {len(analysis_results)} 个分析结果")
 
+            update_progress("完成Excel报告生成")
             self.logger.info(f"所有分析结果已成功导出到: {filepath}")
             return filepath
             
@@ -513,24 +533,33 @@ class ExcelExporter(BaseExporter):
         if not bank_model or bank_model.data.empty:
             return pd.DataFrame()
 
-        full_data = bank_model.data.copy()
-
-        # 按本方姓名和平台类型进行分组统计（忽略数据来源）
+        # 性能优化：避免不必要的DataFrame复制，直接使用原始数据
+        full_data = bank_model.data
         group_keys = ['本方姓名']
 
+        # 性能优化：使用向量化操作和条件筛选，避免lambda函数
         # 存取现汇总
-        cash_summary = full_data.groupby(group_keys).agg(
-            存现金额=('收入金额', lambda x: x[full_data.loc[x.index, '存取现标识'] == '存现'].sum()),
-            取现金额=('支出金额', lambda x: x[full_data.loc[x.index, '存取现标识'] == '取现'].sum())
-        ).reset_index()
+        cash_deposit_mask = full_data['存取现标识'] == '存现'
+        cash_withdraw_mask = full_data['存取现标识'] == '取现'
+        
+        cash_summary = full_data.groupby(group_keys).agg({
+            '收入金额': lambda x: x[cash_deposit_mask[x.index]].sum(),
+            '支出金额': lambda x: x[cash_withdraw_mask[x.index]].sum()
+        }).reset_index()
+        
+        # 重命名列
+        cash_summary.columns = ['本方姓名', '存现金额', '取现金额']
         cash_summary = cash_summary[(cash_summary['存现金额'] > 0) | (cash_summary['取现金额'] > 0)]
 
-        # 转账汇总
-        transfer_summary = full_data[full_data['存取现标识'] == '转账'].groupby(group_keys).agg(
-            转入金额=('收入金额', 'sum'),
-            转出金额=('支出金额', 'sum')
-        ).reset_index()
-        transfer_summary = transfer_summary[(transfer_summary['转入金额'] > 0) | (transfer_summary['转出金额'] > 0)]
+        # 性能优化：先筛选再分组，减少计算量
+        transfer_data = full_data[full_data['存取现标识'] == '转账']
+        if not transfer_data.empty:
+            transfer_summary = transfer_data.groupby(group_keys).agg({
+                '收入金额': 'sum',
+                '支出金额': 'sum'
+            }).reset_index()
+            transfer_summary.columns = ['本方姓名', '转入金额', '转出金额']
+            transfer_summary = transfer_summary[(transfer_summary['转入金额'] > 0) | (transfer_summary['转出金额'] > 0)]
 
         # 合并银行数据
         combined_bank_data = []
@@ -1875,29 +1904,45 @@ class ExcelExporter(BaseExporter):
         workbook : workbook
             Excel工作簿对象
         """
-        # 创建格式
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'top',
-            'bg_color': '#D9E1F2',
-            'border': 1
-        })
+        # 性能优化：缓存格式对象，避免重复创建
+        if not hasattr(self, '_format_cache'):
+            self._format_cache = {}
+        
+        # 创建格式（使用缓存）
+        if 'header_format' not in self._format_cache:
+            self._format_cache['header_format'] = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'top',
+                'bg_color': '#D9E1F2',
+                'border': 1
+            })
 
-        # 不同类型的数值格式
-        money_format = workbook.add_format({'num_format': '#,##0.00'})  # 金额格式
-        integer_format = workbook.add_format({'num_format': '0'})  # 整数格式
-        phone_format = workbook.add_format({'num_format': '@'})  # 文本格式
-        date_format = workbook.add_format({'num_format': 'yyyy-mm-dd'})
+        # 不同类型的数值格式（使用缓存）
+        if 'money_format' not in self._format_cache:
+            self._format_cache['money_format'] = workbook.add_format({'num_format': '#,##0.00'})
+        if 'integer_format' not in self._format_cache:
+            self._format_cache['integer_format'] = workbook.add_format({'num_format': '0'})
+        if 'phone_format' not in self._format_cache:
+            self._format_cache['phone_format'] = workbook.add_format({'num_format': '@'})
+        if 'date_format' not in self._format_cache:
+            self._format_cache['date_format'] = workbook.add_format({'num_format': 'yyyy-mm-dd'})
 
-        # 应用表头格式
+        # 性能优化：批量应用表头格式
+        header_format = self._format_cache['header_format']
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_format)
+
+        # 获取格式对象
+        money_format = self._format_cache['money_format']
+        integer_format = self._format_cache['integer_format']
+        phone_format = self._format_cache['phone_format']
+        date_format = self._format_cache['date_format']
 
         # 为不同类型的列应用相应格式
         for col_num, col_name in enumerate(df.columns):
             col_name_lower = col_name.lower()
-
+            
             # 序号、次数、数量等应该是整数
             if any(keyword in col_name for keyword in ['序号', '次数', '数量', '笔数', '个数', '排名']):
                 worksheet.set_column(col_num, col_num, None, integer_format)
@@ -2156,49 +2201,51 @@ class ExcelExporter(BaseExporter):
             return [''] * len(person_names)
         
         try:
-            # 性能优化：预处理话单数据，使用更高效的方法
-            call_data = call_model.data.copy()
+            # 性能优化：避免不必要的DataFrame复制，直接使用原始数据
+            call_data = call_model.data
             date_column = call_model.date_column if hasattr(call_model, 'date_column') else '呼叫日期'
             
-            # 性能优化：一次性转换日期列，使用向量化操作
-            if date_column in call_data.columns:
-                call_data[date_column] = call_data[date_column].astype(str)
+            # 性能优化：只对需要的列进行类型转换，避免全量复制
+            if date_column not in call_data.columns:
+                return [''] * len(person_names)
             
-            # 性能优化：使用pd.to_datetime的向量化操作
-            call_data['temp_date'] = pd.to_datetime(call_data.get(date_column, ''), errors='coerce')
+            # 性能优化：使用向量化操作一次性转换所有日期
+            call_data_processed = call_data[[date_column, '本方姓名', '对方姓名']].copy()
+            call_data_processed['temp_date'] = pd.to_datetime(
+                call_data_processed[date_column].astype(str), 
+                errors='coerce', 
+                format='mixed'
+            )
             
-            # 性能优化：创建更高效的日期索引
-            valid_dates = call_data[pd.notna(call_data['temp_date'])]['temp_date'].dt.date
-            date_indices = {}
+            # 性能优化：只处理有效日期的数据
+            valid_mask = pd.notna(call_data_processed['temp_date'])
+            if not valid_mask.any():
+                return [''] * len(person_names)
             
-            # 使用groupby创建日期索引，比循环更高效
-            for date_key, indices in call_data[pd.notna(call_data['temp_date'])].groupby(call_data['temp_date'].dt.date).groups.items():
-                date_indices[date_key] = indices.tolist()
+            call_data_valid = call_data_processed[valid_mask].copy()
+            call_data_valid['date_key'] = call_data_valid['temp_date'].dt.date
             
-            # 性能优化：批量处理所有记录，使用更高效的循环
+            # 性能优化：使用更高效的groupby操作，避免循环
+            date_groups = call_data_valid.groupby('date_key')
+            
+            # 预转换交易日期，使用向量化操作
+            tx_dates_series = pd.Series(transaction_dates)
+            tx_dates_converted = pd.to_datetime(tx_dates_series, errors='coerce', format='mixed')
+            
+            # 性能优化：批量处理，减少循环开销
             results = []
-            
-            # 预转换交易日期，避免重复转换
-            tx_dates_converted = []
-            for tx_date in transaction_dates:
-                if not isinstance(tx_date, str):
-                    tx_date = str(tx_date)
-                tx_dates_converted.append(pd.to_datetime(tx_date, errors='coerce'))
-            
-            # 批量处理
             for i, (person_name, tx_date) in enumerate(zip(person_names, tx_dates_converted)):
                 if pd.isna(tx_date):
                     results.append('')
                     continue
                     
                 date_key = tx_date.date()
-                if date_key not in date_indices:
+                if date_key not in date_groups.groups:
                     results.append('')
                     continue
-                    
-                # 使用预处理的索引
-                same_day_indices = date_indices[date_key]
-                same_day_calls = call_data.loc[same_day_indices]
+                
+                # 性能优化：直接使用groupby结果，避免额外的索引操作
+                same_day_calls = date_groups.get_group(date_key)
                 
                 if same_day_calls.empty:
                     results.append('')
@@ -2208,25 +2255,24 @@ class ExcelExporter(BaseExporter):
                 person_name_str = str(person_name)
                 caller_mask = same_day_calls['本方姓名'].astype(str) == person_name_str
                 callee_mask = same_day_calls['对方姓名'].astype(str) == person_name_str
-                # 修复Boolean Series reindexed警告：确保布尔索引与DataFrame索引对齐
                 combined_mask = caller_mask | callee_mask
-                # 使用.reset_index(drop=True)确保索引对齐
-                person_calls = same_day_calls.loc[combined_mask.values] if len(combined_mask) == len(same_day_calls) else same_day_calls[combined_mask]
                 
-                if person_calls.empty:
+                if not combined_mask.any():
                     results.append('')
                     continue
                 
-                # 性能优化：使用集合操作收集联系人
+                person_calls = same_day_calls[combined_mask]
+                
+                # 性能优化：使用集合操作收集联系人，避免多次DataFrame操作
                 contacted_persons = set()
                 
                 # 本方是目标人员的情况
-                caller_records = person_calls[caller_mask]
+                caller_records = person_calls[caller_mask[combined_mask]]
                 if not caller_records.empty:
                     contacted_persons.update(caller_records['对方姓名'].astype(str).unique())
                 
                 # 对方是目标人员的情况
-                callee_records = person_calls[callee_mask]
+                callee_records = person_calls[callee_mask[combined_mask]]
                 if not callee_records.empty:
                     contacted_persons.update(callee_records['本方姓名'].astype(str).unique())
                 

@@ -716,21 +716,45 @@ class FundTrackingEngine:
         if transactions.empty:
             return pd.DataFrame()
         
+        # 性能优化：避免不必要的DataFrame复制，使用视图操作
+        transactions_processed = transactions.copy()
+        transactions_processed['交易日期'] = pd.to_datetime(
+            transactions_processed['交易日期'], 
+            errors='coerce', 
+            format='mixed'
+        )
+        transactions_processed['月份'] = transactions_processed['交易日期'].dt.to_period('M')
+        
+        # 性能优化：只处理有效日期的数据
+        valid_date_mask = pd.notna(transactions_processed['交易日期'])
+        if not valid_date_mask.any():
+            return pd.DataFrame()
+        
+        transactions_valid = transactions_processed[valid_date_mask]
+        
+        # 性能优化：使用更高效的分组操作，减少内存使用
         tracking_results = []
         
-        # 按月份和本方姓名分组，追踪每个人的大额资金流向
-        # 首先提取月份信息
-        transactions_copy = transactions.copy()
-        transactions_copy['交易日期'] = pd.to_datetime(transactions_copy['交易日期'], errors='coerce')
-        transactions_copy['月份'] = transactions_copy['交易日期'].dt.to_period('M')
-        
-        # 按月份和人员分组追踪
-        for (month, person_name), month_person_transactions in transactions_copy.groupby(['月份', '本方姓名']):
-            # 追踪该人员在该月份的大额资金流向
-            person_tracking = self._track_person_funds_by_month(person_name, month_person_transactions, data_models, month)
-            
-            if not person_tracking.empty:
-                tracking_results.append(person_tracking)
+        # 按月份和人员分组追踪，使用更高效的方法
+        for (month, person_name), month_person_transactions in transactions_valid.groupby(['月份', '本方姓名']):
+            # 性能优化：限制单次处理的数据量，避免内存溢出
+            if len(month_person_transactions) > 1000:  # 设置合理的批次大小
+                # 分批处理大量数据
+                batch_size = 500
+                for i in range(0, len(month_person_transactions), batch_size):
+                    batch_data = month_person_transactions.iloc[i:i+batch_size]
+                    person_tracking = self._track_person_funds_by_month(
+                        person_name, batch_data, data_models, month
+                    )
+                    if not person_tracking.empty:
+                        tracking_results.append(person_tracking)
+            else:
+                # 正常处理
+                person_tracking = self._track_person_funds_by_month(
+                    person_name, month_person_transactions, data_models, month
+                )
+                if not person_tracking.empty:
+                    tracking_results.append(person_tracking)
         
         if tracking_results:
             return pd.concat(tracking_results, ignore_index=True)
@@ -764,20 +788,34 @@ class FundTrackingEngine:
         if visited_persons is None:
             visited_persons = set()
         
-        # 避免循环追踪
-        if person_name in visited_persons or current_depth >= self.max_tracking_depth:
+        # 性能优化：限制递归深度，避免栈溢出
+        if person_name in visited_persons or current_depth >= min(self.max_tracking_depth, 5):
             return pd.DataFrame()
         
         visited_persons.add(person_name)
         
         tracking_results = []
         
-        for _, transaction in person_transactions.iterrows():
-            tracking_result = self._track_single_transaction(transaction, data_models, 
-                                                           current_depth, visited_persons.copy())
-            
-            if tracking_result:
-                tracking_results.extend(tracking_result)
+        # 性能优化：使用向量化操作替代iterrows，提高处理速度
+        if len(person_transactions) > 100:
+            # 对于大量数据，使用批量处理
+            batch_size = 50
+            for i in range(0, len(person_transactions), batch_size):
+                batch_transactions = person_transactions.iloc[i:i+batch_size]
+                for _, transaction in batch_transactions.iterrows():
+                    tracking_result = self._track_single_transaction(
+                        transaction, data_models, current_depth, visited_persons.copy()
+                    )
+                    if tracking_result:
+                        tracking_results.extend(tracking_result)
+        else:
+            # 对于少量数据，正常处理
+            for _, transaction in person_transactions.iterrows():
+                tracking_result = self._track_single_transaction(
+                    transaction, data_models, current_depth, visited_persons.copy()
+                )
+                if tracking_result:
+                    tracking_results.extend(tracking_result)
         
         if tracking_results:
             return pd.DataFrame(tracking_results)

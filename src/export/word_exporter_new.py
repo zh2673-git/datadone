@@ -6,6 +6,7 @@ import os
 import logging
 from typing import Dict, List, Optional
 from docx import Document
+from docx.document import Document as DocxDocument
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import numpy as np
@@ -60,7 +61,7 @@ class NewWordExporter:
             self._save_document(doc, report_title)
             return
 
-        # 预构建“重点人员”相关缓存，避免逐人重复计算
+        # 预构建"重点人员"相关缓存，避免逐人重复计算
         self._build_key_persons_caches(data_models, persons_with_financials)
 
         # 为每个人员生成分析报告
@@ -69,12 +70,13 @@ class NewWordExporter:
             print(f"  正在分析 {person_name} ({i+1}/{len(persons_with_financials)})")
             doc.add_heading(f"{i+1}、{person_name}分析", level=2)
             
-            # 在每个被分析人名下添加数据类型说明
-            if data_types:
-                doc.add_paragraph(f"分析依据的数据类型：{', '.join(data_types)}")
+            # 在每个被分析人名下添加数据类型说明（按实际情况呈现）
+            person_data_types = self._get_person_data_types(person_name, data_models)
+            if person_data_types:
+                doc.add_paragraph(f"分析依据的数据类型：{', '.join(person_data_types)}")
                 
             # 如果有银行数据，列出具体银行（针对该人员）
-            if '银行' in data_types:
+            if '银行' in person_data_types:
                 bank_data = data_models['bank'].data[data_models['bank'].data[data_models['bank'].name_column] == person_name]
                 if not bank_data.empty and '银行类型' in bank_data.columns:
                     bank_names = set()
@@ -113,7 +115,40 @@ class NewWordExporter:
                     financial_persons.update(model.data[name_col].dropna().unique().tolist())
         return sorted(list(financial_persons))
 
-    def _generate_fund_volume_analysis(self, doc: Document, person_name: str, data_models: Dict, analyzers: Dict):
+    def _get_person_data_types(self, person_name: str, data_models: Dict) -> List[str]:
+        """获取指定人员实际拥有的数据类型"""
+        person_data_types = []
+        
+        # 检查银行数据
+        if data_models.get('bank') and not data_models['bank'].data.empty:
+            bank_data = data_models['bank'].data[data_models['bank'].data[data_models['bank'].name_column] == person_name]
+            if not bank_data.empty:
+                person_data_types.append('银行')
+        
+        # 检查微信数据
+        if data_models.get('wechat') and not data_models['wechat'].data.empty:
+            wechat_data = data_models['wechat'].data[data_models['wechat'].data[data_models['wechat'].name_column] == person_name]
+            if not wechat_data.empty:
+                person_data_types.append('微信')
+        
+        # 检查支付宝数据
+        if data_models.get('alipay') and not data_models['alipay'].data.empty:
+            alipay_data = data_models['alipay'].data[data_models['alipay'].data[data_models['alipay'].name_column] == person_name]
+            if not alipay_data.empty:
+                person_data_types.append('支付宝')
+        
+        # 检查话单数据
+        if data_models.get('call') and not data_models['call'].data.empty:
+            call_data = data_models['call'].data[
+                (data_models['call'].data[data_models['call'].name_column] == person_name) |
+                (data_models['call'].data.get('对方姓名', '') == person_name)
+            ]
+            if not call_data.empty:
+                person_data_types.append('话单')
+        
+        return person_data_types
+
+    def _generate_fund_volume_analysis(self, doc: DocxDocument, person_name: str, data_models: Dict, analyzers: Dict):
         """生成资金体量分析"""
         doc.add_heading("一、资金体量", level=3)
         
@@ -126,7 +161,7 @@ class NewWordExporter:
         # 3. 存取现和大额资金
         self._generate_cash_and_large_amounts(doc, person_name, data_models)
 
-    def _generate_total_fund_volume(self, doc: Document, person_name: str, data_models: Dict):
+    def _generate_total_fund_volume(self, doc: DocxDocument, person_name: str, data_models: Dict):
         """生成总资金体量分析"""
         p = doc.add_paragraph()
         p.add_run("1.总资金体量：").bold = True
@@ -169,8 +204,10 @@ class NewWordExporter:
                 p.add_run("银行总进账").underline = True
                 if income >= 10000000:  # 1000万
                     p.add_run(f"{income:,.2f}元").bold = True
+
                 else:
                     p.add_run(f"{income:,.2f}元")
+
                 p.add_run("、")
                 p.add_run("银行总出账").underline = True
                 if abs(expense) >= 10000000:  # 1000万
@@ -279,7 +316,7 @@ class NewWordExporter:
                         bank_info.append(f"{bank_name}({count}笔)")
                     p.add_run(f"最常用的银行：{', '.join(bank_info)}；")
 
-    def _generate_active_time_and_opponents(self, doc: Document, person_name: str, data_models: Dict):
+    def _generate_active_time_and_opponents(self, doc: DocxDocument, person_name: str, data_models: Dict):
         """生成活跃时间和交易对手分析"""
         p = doc.add_paragraph()
         p.add_run("2.活跃时间和交易对手：").bold = True
@@ -343,7 +380,7 @@ class NewWordExporter:
                                 p.add_run("交易资金总量的对手前三名：")
                                 p.add_run(f"{', '.join(opponent_info)}；")
 
-    def _generate_cash_and_large_amounts(self, doc: Document, person_name: str, data_models: Dict):
+    def _generate_cash_and_large_amounts(self, doc: DocxDocument, person_name: str, data_models: Dict):
         """生成存取现和大额资金分析"""
         p = doc.add_paragraph()
         p.add_run("3.存取现和大额资金：").bold = True
@@ -459,7 +496,7 @@ class NewWordExporter:
                         p.add_run(large_transfer_text)
                     p.add_run("；")
 
-    def _generate_special_fund_analysis(self, doc: Document, person_name: str, data_models: Dict, analyzers: Dict):
+    def _generate_special_fund_analysis(self, doc: DocxDocument, person_name: str, data_models: Dict, analyzers: Dict):
         """生成特殊资金分析"""
         doc.add_heading("二、特殊资金分析", level=3)
         
@@ -472,13 +509,14 @@ class NewWordExporter:
         # 3. 特殊日期统计
         self._generate_special_date_stats(doc, person_name, data_models, analyzers)
 
-    def _generate_pure_income_expense_stats(self, doc: Document, person_name: str, data_models: Dict):
+    def _generate_pure_income_expense_stats(self, doc: DocxDocument, person_name: str, data_models: Dict):
         """生成纯进、出账统计"""
         p = doc.add_paragraph()
         p.add_run("1.纯进、出账统计：").bold = True
         
-        pure_income_opponents = {}
-        pure_expense_opponents = {}
+        # 根据用户需求修改：纯进账 = 收入总额 > 0 且 支出总额 = 0 ， 纯出账 = 支出总额 > 0 且 收入总额 = 0
+        pure_income_opponents = {}  # 收入总额 > 0 且 支出总额 = 0 的对手
+        pure_expense_opponents = {}  # 支出总额 > 0 且 收入总额 = 0 的对手
         
         # 分析各平台数据
         platforms = ['银行', '微信', '支付宝']
@@ -499,22 +537,45 @@ class NewWordExporter:
                                                 (platform_data['对方姓名'] != '未知')]
                     
                     if not opponent_data.empty:
-                        # 计算每个对手方的净流入/流出
-                        opponent_net = opponent_data.groupby('对方姓名')['交易金额'].sum()
+                        # 按对方姓名分组，计算每个人的总收入和总支出
+                        opponent_summary = opponent_data.groupby('对方姓名').agg({
+                            '交易金额': ['sum', 'count']
+                        }).reset_index()
                         
-                        # 纯收入对手（净流入>0）
-                        pure_income = opponent_net[opponent_net > 0]
-                        for opponent, amount in pure_income.items():
+                        # 扁平化列名
+                        opponent_summary.columns = ['对方姓名', '净金额', '交易次数']
+                        
+                        # 分别计算收入和支出
+                        income_data = opponent_data[opponent_data['交易金额'] > 0]
+                        expense_data = opponent_data[opponent_data['交易金额'] < 0]
+                        
+                        income_summary = income_data.groupby('对方姓名')['交易金额'].sum().reset_index()
+                        income_summary.rename(columns={'交易金额': '收入总额'}, inplace=True)
+                        
+                        expense_summary = expense_data.groupby('对方姓名')['交易金额'].sum().reset_index()
+                        expense_summary.rename(columns={'交易金额': '支出总额'}, inplace=True)
+                        
+                        # 合并收入和支出数据
+                        opponent_financials = pd.merge(income_summary, expense_summary, on='对方姓名', how='outer').fillna(0)
+                        
+                        # 根据用户需求判断纯收入和纯支出对手
+                        # 纯收入对手：收入总额 > 0 且 支出总额 = 0
+                        pure_income = opponent_financials[(opponent_financials['收入总额'] > 0) & (opponent_financials['支出总额'] == 0)]
+                        for _, row in pure_income.iterrows():
+                            opponent = row['对方姓名']
+                            amount = row['收入总额']
                             if opponent not in pure_income_opponents:
                                 pure_income_opponents[opponent] = 0
                             pure_income_opponents[opponent] += amount
                         
-                        # 纯支出对手（净流出<0）
-                        pure_expense = opponent_net[opponent_net < 0]
-                        for opponent, amount in pure_expense.items():
+                        # 纯支出对手：支出总额 > 0 且 收入总额 = 0
+                        pure_expense = opponent_financials[(opponent_financials['支出总额'] < 0) & (opponent_financials['收入总额'] == 0)]
+                        for _, row in pure_expense.iterrows():
+                            opponent = row['对方姓名']
+                            amount = abs(row['支出总额'])
                             if opponent not in pure_expense_opponents:
                                 pure_expense_opponents[opponent] = 0
-                            pure_expense_opponents[opponent] += abs(amount)
+                            pure_expense_opponents[opponent] += amount
         
         # 统计纯收入和纯支出对手数量
         pure_income_count = len(pure_income_opponents)
@@ -537,7 +598,7 @@ class NewWordExporter:
             expense_info = [f"{opponent}（{amount:,.2f}元）" for opponent, amount in sorted_expense]
             p.add_run(f"纯出账的对手前五名：{', '.join(expense_info)}；")
 
-    def _generate_special_amount_stats(self, doc: Document, person_name: str, data_models: Dict, analyzers: Dict):
+    def _generate_special_amount_stats(self, doc: DocxDocument, person_name: str, data_models: Dict, analyzers: Dict):
         """生成特殊金额统计（使用原Word报告的逻辑）"""
         p = doc.add_paragraph()
         p.add_run("2.特殊金额统计：").bold = True
@@ -660,7 +721,7 @@ class NewWordExporter:
         else:
             p.add_run("未发现特殊金额交易。")
 
-    def _generate_special_date_stats(self, doc: Document, person_name: str, data_models: Dict, analyzers: Dict):
+    def _generate_special_date_stats(self, doc: DocxDocument, person_name: str, data_models: Dict, analyzers: Dict):
         """生成特殊日期统计（使用原Word报告的逻辑）"""
         p = doc.add_paragraph()
         p.add_run("3.特殊日期统计：").bold = True
@@ -753,7 +814,7 @@ class NewWordExporter:
         else:
             p.add_run("未发现特殊日期交易。")
 
-    def _generate_key_transactions_analysis(self, doc: Document, person_name: str, data_models: Dict, analyzers: Dict):
+    def _generate_key_transactions_analysis(self, doc: DocxDocument, person_name: str, data_models: Dict, analyzers: Dict):
         """生成重点收支分析"""
         doc.add_heading("三、重点收支", level=3)
         
@@ -769,7 +830,7 @@ class NewWordExporter:
         # 3. 理财收入
         self._generate_financial_income(doc, person_name, data_models, key_engine)
 
-    def _generate_work_income_expense(self, doc: Document, person_name: str, data_models: Dict, key_engine: KeyTransactionEngine):
+    def _generate_work_income_expense(self, doc: DocxDocument, person_name: str, data_models: Dict, key_engine: KeyTransactionEngine):
         """生成工作收支分析"""
         work_stats = {
             'income_total': 0,
@@ -800,21 +861,21 @@ class NewWordExporter:
                     if platform == '银行':
                         identified_data = key_engine.identify_key_transactions(
                             platform_data,
-                            model.summary_column if hasattr(model, 'summary_column') else None,
-                            model.remark_column if hasattr(model, 'remark_column') else None,
-                            model.type_column if hasattr(model, 'type_column') else None,
+                            model.summary_column if hasattr(model, 'summary_column') else '',
+                            model.remark_column if hasattr(model, 'remark_column') else '',
+                            model.type_column if hasattr(model, 'type_column') else '',
                             model.amount_column,
-                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else None
+                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else ''
                         )
                     else:
                         # 微信和支付宝使用不同的列名
                         identified_data = key_engine.identify_key_transactions(
                             platform_data,
-                            None,  # 微信支付宝没有摘要列
-                            model.remark_column if hasattr(model, 'remark_column') else None,
-                            model.type_column if hasattr(model, 'type_column') else None,
+                            '',  # 微信支付宝没有摘要列
+                            model.remark_column if hasattr(model, 'remark_column') else '',
+                            model.type_column if hasattr(model, 'type_column') else '',
                             model.amount_column,
-                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else None
+                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else ''
                         )
                     
                     # 筛选工作收入相关交易
@@ -826,7 +887,7 @@ class NewWordExporter:
                         # 收集工作单位信息
                         if '对方姓名' in work_income_data.columns:
                             work_stats['work_units'].update(
-                                work_income_data['对方姓名'].dropna().unique()
+                                pd.Series(work_income_data['对方姓名']).dropna().unique()
                             )
                         
                         # 收集日期信息
@@ -845,8 +906,20 @@ class NewWordExporter:
                 if all_dates:
                     dates = pd.to_datetime([d for d in all_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年%m月')}至{dates.max().strftime('%Y年%m月')}"
-                        work_stats['time_range'] = time_range
+                        try:
+                            min_date = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if hasattr(min_date, 'strftime') and hasattr(max_date, 'strftime'):
+                                try:
+                                    # 确保是datetime类型再调用strftime
+                                    if isinstance(min_date, pd.Timestamp) and isinstance(max_date, pd.Timestamp):
+                                        time_range = f"{min_date.strftime('%Y年%m月')}至{max_date.strftime('%Y年%m月')}"
+                                        work_stats['time_range'] = time_range
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                 
                 income_info = f"工作收入{work_stats['income_total']:,.2f}元"
                 if work_stats['time_range']:
@@ -865,7 +938,7 @@ class NewWordExporter:
                     p.add_run(f"（{', '.join(units)}）")
                 p.add_run("；")
 
-    def _generate_property_vehicle_income_expense(self, doc: Document, person_name: str, data_models: Dict, key_engine: KeyTransactionEngine):
+    def _generate_property_vehicle_income_expense(self, doc: DocxDocument, person_name: str, data_models: Dict, key_engine: KeyTransactionEngine):
         """生成房产车辆收支分析"""
         property_stats = {
             'income_total': 0,
@@ -918,21 +991,21 @@ class NewWordExporter:
                     if platform == '银行':
                         identified_data = key_engine.identify_key_transactions(
                             platform_data,
-                            model.summary_column if hasattr(model, 'summary_column') else None,
-                            model.remark_column if hasattr(model, 'remark_column') else None,
-                            model.type_column if hasattr(model, 'type_column') else None,
+                            model.summary_column if hasattr(model, 'summary_column') else '',
+                            model.remark_column if hasattr(model, 'remark_column') else '',
+                            model.type_column if hasattr(model, 'type_column') else '',
                             model.amount_column,
-                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else None
+                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else ''
                         )
                     else:
                         # 微信和支付宝使用不同的列名
                         identified_data = key_engine.identify_key_transactions(
                             platform_data,
-                            None,  # 微信支付宝没有摘要列
-                            model.remark_column if hasattr(model, 'remark_column') else None,
-                            model.type_column if hasattr(model, 'type_column') else None,
+                            '',  # 微信支付宝没有摘要列
+                            model.remark_column if hasattr(model, 'remark_column') else '',
+                            model.type_column if hasattr(model, 'type_column') else '',
                             model.amount_column,
-                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else None
+                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else ''
                         )
                     
                     # 房产相关交易
@@ -1049,8 +1122,15 @@ class NewWordExporter:
                 if all_property_dates:
                     dates = pd.to_datetime([d for d in all_property_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年')}、{dates.max().strftime('%Y年')}"
-                        property_info += f"，时间是{time_range}"
+                        try:
+                            min_date_val = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date_val = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if isinstance(min_date_val, pd.Timestamp) and isinstance(max_date_val, pd.Timestamp):
+                                time_range = f"{min_date_val.strftime('%Y年')}、{max_date_val.strftime('%Y年')}"
+                                property_info += f"，时间是{time_range}"
+                        except Exception:
+                            pass
                 
                 # 对手信息
                 opponent_info = []
@@ -1074,8 +1154,15 @@ class NewWordExporter:
                 if all_property_dates:
                     dates = pd.to_datetime([d for d in all_property_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年')}、{dates.max().strftime('%Y年')}"
-                        p.add_run(f"，时间是{time_range}")
+                        try:
+                            min_date_val = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date_val = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if isinstance(min_date_val, pd.Timestamp) and isinstance(max_date_val, pd.Timestamp):
+                                time_range = f"{min_date_val.strftime('%Y年')}、{max_date_val.strftime('%Y年')}"
+                                p.add_run(f"，时间是{time_range}")
+                        except Exception:
+                            pass
                 
                 # 对手信息
                 opponent_info = []
@@ -1100,8 +1187,15 @@ class NewWordExporter:
                 if all_vehicle_dates:
                     dates = pd.to_datetime([d for d in all_vehicle_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年')}、{dates.max().strftime('%Y年')}"
-                        vehicle_info += f"，时间是{time_range}"
+                        try:
+                            min_date_val = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date_val = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if isinstance(min_date_val, pd.Timestamp) and isinstance(max_date_val, pd.Timestamp):
+                                time_range = f"{min_date_val.strftime('%Y年')}、{max_date_val.strftime('%Y年')}"
+                                vehicle_info += f"，时间是{time_range}"
+                        except Exception:
+                            pass
                 
                 # 对手信息
                 opponent_info = []
@@ -1125,8 +1219,15 @@ class NewWordExporter:
                 if all_vehicle_dates:
                     dates = pd.to_datetime([d for d in all_vehicle_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年')}、{dates.max().strftime('%Y年')}"
-                        p.add_run(f"，时间是{time_range}")
+                        try:
+                            min_date_val = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date_val = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if isinstance(min_date_val, pd.Timestamp) and isinstance(max_date_val, pd.Timestamp):
+                                time_range = f"{min_date_val.strftime('%Y年')}、{max_date_val.strftime('%Y年')}"
+                                p.add_run(f"，时间是{time_range}")
+                        except Exception:
+                            pass
                 
                 # 对手信息
                 opponent_info = []
@@ -1151,8 +1252,15 @@ class NewWordExporter:
                 if all_rental_dates:
                     dates = pd.to_datetime([d for d in all_rental_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年')}、{dates.max().strftime('%Y年')}"
-                        rental_info += f"，时间是{time_range}"
+                        try:
+                            min_date_val = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date_val = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if isinstance(min_date_val, pd.Timestamp) and isinstance(max_date_val, pd.Timestamp):
+                                time_range = f"{min_date_val.strftime('%Y年')}、{max_date_val.strftime('%Y年')}"
+                                rental_info += f"，时间是{time_range}"
+                        except Exception:
+                            pass
                 
                 # 对手信息
                 opponent_info = []
@@ -1176,8 +1284,15 @@ class NewWordExporter:
                 if all_rental_dates:
                     dates = pd.to_datetime([d for d in all_rental_dates if not pd.isna(d)])
                     if len(dates) > 0:
-                        time_range = f"{dates.min().strftime('%Y年')}、{dates.max().strftime('%Y年')}"
-                        p.add_run(f"，时间是{time_range}")
+                        try:
+                            min_date_val = pd.to_datetime([dates.min()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            max_date_val = pd.to_datetime([dates.max()], errors='coerce')[0] if len(dates) > 0 else pd.NaT
+                            # 确保是datetime类型再调用strftime
+                            if isinstance(min_date_val, pd.Timestamp) and isinstance(max_date_val, pd.Timestamp):
+                                time_range = f"{min_date_val.strftime('%Y年')}、{max_date_val.strftime('%Y年')}"
+                                p.add_run(f"，时间是{time_range}")
+                        except Exception:
+                            pass
                 
                 # 对手信息
                 opponent_info = []
@@ -1192,7 +1307,7 @@ class NewWordExporter:
                     p.add_run("，交易对手列举" + "；".join(opponent_info))
                 p.add_run("；")
 
-    def _generate_financial_income(self, doc: Document, person_name: str, data_models: Dict, key_engine: KeyTransactionEngine):
+    def _generate_financial_income(self, doc: DocxDocument, person_name: str, data_models: Dict, key_engine: KeyTransactionEngine):
         """生成理财收入分析"""
         financial_stats = {
             'income_total': 0,
@@ -1224,21 +1339,21 @@ class NewWordExporter:
                     if platform == '银行':
                         identified_data = key_engine.identify_key_transactions(
                             platform_data,
-                            model.summary_column if hasattr(model, 'summary_column') else None,
-                            model.remark_column if hasattr(model, 'remark_column') else None,
-                            model.type_column if hasattr(model, 'type_column') else None,
+                            model.summary_column if hasattr(model, 'summary_column') else '',
+                            model.remark_column if hasattr(model, 'remark_column') else '',
+                            model.type_column if hasattr(model, 'type_column') else '',
                             model.amount_column,
-                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else None
+                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else ''
                         )
                     else:
                         # 微信和支付宝使用不同的列名
                         identified_data = key_engine.identify_key_transactions(
                             platform_data,
-                            None,  # 微信支付宝没有摘要列
-                            model.remark_column if hasattr(model, 'remark_column') else None,
-                            model.type_column if hasattr(model, 'type_column') else None,
+                            '',  # 微信支付宝没有摘要列
+                            model.remark_column if hasattr(model, 'remark_column') else '',
+                            model.type_column if hasattr(model, 'type_column') else '',
                             model.amount_column,
-                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else None
+                            model.opposite_name_column if hasattr(model, 'opposite_name_column') else ''
                         )
                     
                     # 理财收入相关交易
@@ -1341,7 +1456,7 @@ class NewWordExporter:
                     p.add_run(f"，其中{'、'.join(expense_details)}")
             p.add_run("；")
 
-    def _generate_key_persons_analysis(self, doc: Document, person_name: str, data_models: Dict):
+    def _generate_key_persons_analysis(self, doc: DocxDocument, person_name: str, data_models: Dict):
         """生成重点人员分析（按人生成，列举名单并显示单位信息）"""
         doc.add_heading("四、重点人员", level=3)
 
@@ -1352,7 +1467,7 @@ class NewWordExporter:
         person_large_dates = cached.get('person_large_dates', {})
         tracking_df = cached.get('tracking_df')
 
-        # 1) 存取现与话单匹配的人员：存取现当天与该人有通联的对手名单（去重），显示单位
+        # 1) 存取现与话单匹配的人员：存取现当天与该人有通联的对手名单（去重），显示单位和通话日期
         p1 = doc.add_paragraph()
         p1.add_run("1.存取现与话单匹配的人员：").bold = True
         cash_contacts: List[str] = []
@@ -1366,16 +1481,21 @@ class NewWordExporter:
         if cash_contacts:
             display_items = []
             for nm in cash_contacts:
-                unit = self._get_unit_cached(nm, data_models)
-                if unit:
+                unit = self._get_unit_for_contact_cached(person_name, nm, data_models)
+                call_date = self._get_call_date_cached(nm, person_name, data_models)
+                if unit and call_date:
+                    display_items.append(f"{nm}（{unit}、{call_date}）")
+                elif unit:
                     display_items.append(f"{nm}（{unit}）")
+                elif call_date:
+                    display_items.append(f"{nm}（{call_date}）")
                 else:
                     display_items.append(nm)
             p1.add_run(f"存取现当天有通联的有{'、'.join(display_items)}等；")
         else:
             p1.add_run("未发现存取现与话单匹配的人员；")
 
-        # 2) 大额资金跟踪与话单匹配的人员：发生大额资金当天与该人有通联的对手名单（去重），显示单位
+        # 2) 大额资金跟踪与话单匹配的人员：发生大额资金当天与该人有通联的对手名单（去重），显示单位和通话日期
         p2 = doc.add_paragraph()
         p2.add_run("2.大额资金跟踪与话单匹配的人员：").bold = True
         large_contacts: List[str] = []
@@ -1388,9 +1508,14 @@ class NewWordExporter:
         if large_contacts:
             display_items = []
             for nm in large_contacts:
-                unit = self._get_unit_cached(nm, data_models)
-                if unit:
+                unit = self._get_unit_for_contact_cached(person_name, nm, data_models)
+                call_date = self._get_call_date_cached(nm, person_name, data_models)
+                if unit and call_date:
+                    display_items.append(f"{nm}（{unit}、{call_date}）")
+                elif unit:
                     display_items.append(f"{nm}（{unit}）")
+                elif call_date:
+                    display_items.append(f"{nm}（{call_date}）")
                 else:
                     display_items.append(nm)
             p2.add_run(f"发生大额资金当天与话单匹配的人员有{'、'.join(display_items)}等；")
@@ -1439,7 +1564,7 @@ class NewWordExporter:
                             continue
                         items = []
                         for assoc, via_set in grouped.items():
-                            unit = self._get_unit_cached(assoc, data_models)
+                            unit = self._get_unit_for_contact_cached(person_name, assoc, data_models)
                             assoc_disp = f"{assoc}（{unit}）" if unit else assoc
                             if level == 0:
                                 items.append(assoc_disp)
@@ -1447,7 +1572,7 @@ class NewWordExporter:
                                 if via_set:
                                     via_list = []
                                     for v in sorted(via_set):
-                                        vu = self._get_unit_cached(v, data_models)
+                                        vu = self._get_unit_for_contact_cached(person_name, v, data_models)
                                         via_list.append(f"{v}（{vu}）" if vu else v)
                                     items.append(f"{assoc_disp}，通过{'、'.join(via_list)}跟踪")
                                 else:
@@ -1456,13 +1581,13 @@ class NewWordExporter:
                                 if via_set:
                                     via_list = []
                                     for v in sorted(via_set):
-                                        vu = self._get_unit_cached(v, data_models)
+                                        vu = self._get_unit_for_contact_cached(person_name, v, data_models)
                                         via_list.append(f"{v}（{vu}）" if vu else v)
                                     items.append(f"{assoc_disp}，通过{'、'.join(via_list)}跟踪")
                                 else:
                                     items.append(assoc_disp)
                         if items:
-                            lines.append(f"跟踪层级为{level}的人员有{'、'.join(items)}")
+                            lines.append(f"跟踪层级为{level}的人员：{'；'.join(items)}")
                     if lines:
                         p3.add_run("；".join(lines) + "；")
                     else:
@@ -1505,13 +1630,18 @@ class NewWordExporter:
 
         self._cached_data['person_day_contacts'] = person_day_contacts
 
-        # 2) 每人存取现日期集合
+        # 2) 每人存取现日期集合（只考虑1万以上的存取现交易）
         person_cash_dates: Dict[str, set] = {p: set() for p in persons}
         for dtype in ['bank', 'wechat', 'alipay']:
             model = data_models.get(dtype)
-            if model and not model.data.empty and '存取现标识' in model.data.columns and hasattr(model, 'date_column') and hasattr(model, 'name_column'):
+            if model and not model.data.empty and '存取现标识' in model.data.columns and hasattr(model, 'date_column') and hasattr(model, 'name_column') and hasattr(model, 'amount_column'):
                 df = model.data[model.data['存取现标识'].isin(['存现', '取现'])].copy()
-                if df.empty or model.date_column not in df.columns:
+                if df.empty or model.date_column not in df.columns or model.amount_column not in df.columns:
+                    continue
+                # 只考虑金额大于等于1万的存取现交易
+                df.loc[:, model.amount_column] = pd.to_numeric(df[model.amount_column], errors='coerce')
+                df = df[df[model.amount_column].abs() >= 10000]
+                if df.empty:
                     continue
                 df.loc[:, model.date_column] = pd.to_datetime(df[model.date_column], errors='coerce')
                 df = df.dropna(subset=[model.date_column])
@@ -1568,6 +1698,30 @@ class NewWordExporter:
         unit_cache[name] = unit
         return unit
 
+    def _get_unit_for_contact_cached(self, person_name: str, contact_name: str, data_models: Dict) -> str:
+        """带缓存的联系人单位信息获取（基于与指定人员的通联记录）"""
+        if not hasattr(self, '_cached_data'):
+            self._cached_data = {}
+        contact_unit_cache = self._cached_data.setdefault('contact_unit_cache', {})
+        cache_key = f"{person_name}_{contact_name}"
+        if cache_key in contact_unit_cache:
+            return contact_unit_cache[cache_key]
+        unit = self._extract_unit_info_for_contact(person_name, contact_name, data_models)
+        contact_unit_cache[cache_key] = unit
+        return unit
+
+    def _get_call_date_cached(self, opponent_name: str, person_name: str, data_models: Dict) -> str:
+        """带缓存的通话日期信息获取"""
+        if not hasattr(self, '_cached_data'):
+            self._cached_data = {}
+        call_date_cache = self._cached_data.setdefault('call_date_cache', {})
+        cache_key = f"{opponent_name}_{person_name}"
+        if cache_key in call_date_cache:
+            return call_date_cache[cache_key]
+        call_date = self._extract_call_date_from_call_data(opponent_name, person_name, data_models)
+        call_date_cache[cache_key] = call_date
+        return call_date
+
     def _precompute_key_persons_data(self, data_models: Dict):
         """预计算重点人员分析所需的数据，提升性能"""
         # 创建缓存属性
@@ -1612,7 +1766,7 @@ class NewWordExporter:
                         large_amount_data[data_type] = large_amounts
             self._cached_data['large_amount_data'] = large_amount_data
 
-    def _generate_cash_call_matching_persons(self, doc: Document, data_models: Dict):
+    def _generate_cash_call_matching_persons(self, doc: DocxDocument, data_models: Dict):
         """生成存取现与话单匹配的人员（性能优化版本）"""
         p = doc.add_paragraph()
         p.add_run("1.存取现与话单匹配的人员：").bold = True
@@ -1670,10 +1824,10 @@ class NewWordExporter:
                         (same_day_calls['对方姓名'] == person_name)
                     ]
                     
-                    if not person_calls.empty:
+                    if len(person_calls) > 0:
                         # 收集联系人
                         contacts = set()
-                        for _, call in person_calls.iterrows():
+                        for call in person_calls:
                             if call['本方姓名'] == person_name:
                                 contacts.add(call['对方姓名'])
                             else:
@@ -1693,7 +1847,7 @@ class NewWordExporter:
         
         return formatted_results
 
-    def _generate_cash_call_matching_persons_original(self, doc: Document, data_models: Dict):
+    def _generate_cash_call_matching_persons_original(self, doc: DocxDocument, data_models: Dict):
         """生成存取现与话单匹配的人员（原始版本，保留作为备份）"""
         p = doc.add_paragraph()
         p.add_run("1.存取现与话单匹配的人员：").bold = True
@@ -1720,7 +1874,7 @@ class NewWordExporter:
                         match_info = row.get('话单匹配', '')
                         
                         # 从话单匹配信息中提取对方人员
-                        if '对方' in match_info:
+                        if match_info and '对方' in match_info:
                             # 提取对方人员信息
                             parts = match_info.split('对方')
                             if len(parts) > 1:
@@ -1756,7 +1910,7 @@ class NewWordExporter:
             self.logger.warning(f"生成存取现与话单匹配人员信息时出错: {e}")
             p.add_run("未发现存取现与话单匹配的人员；")
 
-    def _generate_large_fund_call_matching_persons(self, doc: Document, data_models: Dict):
+    def _generate_large_fund_call_matching_persons(self, doc: DocxDocument, data_models: Dict):
         """生成大额资金跟踪与话单匹配的人员（性能优化版本）"""
         p = doc.add_paragraph()
         p.add_run("2.大额资金跟踪与话单匹配的人员：").bold = True
@@ -1814,10 +1968,10 @@ class NewWordExporter:
                         (same_day_calls['对方姓名'] == person_name)
                     ]
                     
-                    if not person_calls.empty:
+                    if len(person_calls) > 0:
                         # 收集联系人
                         contacts = set()
-                        for _, call in person_calls.iterrows():
+                        for call in person_calls:
                             if call['本方姓名'] == person_name:
                                 contacts.add(call['对方姓名'])
                             else:
@@ -1837,7 +1991,7 @@ class NewWordExporter:
         
         return formatted_results
 
-    def _generate_large_fund_call_matching_persons_original(self, doc: Document, data_models: Dict):
+    def _generate_large_fund_call_matching_persons_original(self, doc: DocxDocument, data_models: Dict):
         """生成大额资金跟踪与话单匹配的人员（原始版本，保留作为备份）"""
         p = doc.add_paragraph()
         p.add_run("2.大额资金跟踪与话单匹配的人员：").bold = True
@@ -1873,7 +2027,7 @@ class NewWordExporter:
                         match_info = row.get('话单匹配', '')
                         
                         # 从话单匹配信息中提取对方人员
-                        if '对方' in match_info:
+                        if match_info and '对方' in match_info:
                             # 提取对方人员信息
                             parts = match_info.split('对方')
                             if len(parts) > 1:
@@ -1908,7 +2062,7 @@ class NewWordExporter:
         else:
             p.add_run("未发现大额资金与话单匹配的人员；")
 
-    def _generate_large_fund_tracking_persons(self, doc: Document, data_models: Dict):
+    def _generate_large_fund_tracking_persons(self, doc: DocxDocument, data_models: Dict):
         """生成大额资金跟踪层级区分的重点人员（性能优化版本）"""
         p = doc.add_paragraph()
         p.add_run("3.大额资金跟踪层级区分的重点人员：").bold = True
@@ -1970,7 +2124,7 @@ class NewWordExporter:
         
         return level_results
 
-    def _generate_large_fund_tracking_persons_original(self, doc: Document, data_models: Dict):
+    def _generate_large_fund_tracking_persons_original(self, doc: DocxDocument, data_models: Dict):
         """生成大额资金跟踪层级区分的重点人员（原始版本，保留作为备份）"""
         p = doc.add_paragraph()
         p.add_run("3.大额资金跟踪层级区分的重点人员：").bold = True
@@ -2036,7 +2190,76 @@ class NewWordExporter:
             self.logger.warning(f"提取人员{person_name}的单位信息时出错: {e}")
             return ""
 
-    def _save_document(self, doc: Document, title: str) -> Optional[str]:
+    def _extract_unit_info_for_contact(self, person_name: str, contact_name: str, data_models: Dict) -> str:
+        """从话单数据中提取与指定人员通联的联系人的单位信息"""
+        try:
+            if 'call' in data_models and data_models['call'] and not data_models['call'].data.empty:
+                call_data = data_models['call'].data
+                
+                # 查找person_name与contact_name的通联记录
+                contact_records = call_data[
+                    ((call_data['本方姓名'] == person_name) & (call_data['对方姓名'] == contact_name)) |
+                    ((call_data['本方姓名'] == contact_name) & (call_data['对方姓名'] == person_name))
+                ]
+                
+                if not contact_records.empty:
+                    # 优先从对方记录中获取单位信息
+                    if contact_name != person_name:
+                        # 如果contact_name是对方姓名
+                        contact_mask = contact_records['对方姓名'] == contact_name
+                        if contact_mask.any():
+                            contact_rows = contact_records[contact_mask]
+                            unit_columns = ['对方单位名称', '对方单位', '单位名称']
+                            for col in unit_columns:
+                                if col in contact_rows.columns:
+                                    units = contact_rows[col].dropna().unique()
+                                    if len(units) > 0:
+                                        # 返回第一个非空单位信息
+                                        return str(units[0])
+                        
+                        # 如果contact_name是本方姓名
+                        person_mask = contact_records['本方姓名'] == contact_name
+                        if person_mask.any():
+                            person_rows = contact_records[person_mask]
+                            unit_columns = ['对方单位名称', '对方单位', '单位名称']
+                            for col in unit_columns:
+                                if col in person_rows.columns:
+                                    units = person_rows[col].dropna().unique()
+                                    if len(units) > 0:
+                                        # 返回第一个非空单位信息
+                                        return str(units[0])
+            
+            return ""
+        except Exception as e:
+            self.logger.warning(f"提取人员{person_name}与{contact_name}通联记录中的单位信息时出错: {e}")
+            return ""
+
+    def _extract_call_date_from_call_data(self, opponent_name: str, person_name: str, data_models: Dict) -> str:
+        """从话单数据中提取通话日期信息"""
+        try:
+            if 'call' in data_models and data_models['call'] and not data_models['call'].data.empty:
+                call_data = data_models['call'].data
+                
+                # 查找该人员与对方的通话记录
+                person_calls = call_data[
+                    ((call_data['本方姓名'] == person_name) & (call_data['对方姓名'] == opponent_name)) |
+                    ((call_data['本方姓名'] == opponent_name) & (call_data['对方姓名'] == person_name))
+                ]
+                
+                if not person_calls.empty:
+                    # 获取第一条记录的通话日期
+                    call_date_series = person_calls['呼叫日期'].dropna()
+                    if len(call_date_series) > 0:
+                        call_date = pd.to_datetime(call_date_series.iloc[0], errors='coerce')
+                        if pd.notna(call_date):
+                            return call_date.strftime('%Y年%m月%d日')
+            
+            return ""
+        except Exception as e:
+            self.logger.warning(f"提取人员{person_name}与{opponent_name}的通话日期信息时出错: {e}")
+            return ""
+
+    def _save_document(self, doc: DocxDocument, title: str) -> Optional[str]:
         try:
             safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
             filename = f"{safe_title}.docx"

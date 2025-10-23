@@ -1491,7 +1491,19 @@ class NewWordExporter:
                     display_items.append(f"{nm}（{call_date}）")
                 else:
                     display_items.append(nm)
-            p1.add_run(f"存取现当天有通联的有{'、'.join(display_items)}等；")
+            
+            # 优化显示格式：最多显示10个，添加下划线和数量
+            if len(display_items) > 10:
+                displayed_items = display_items[:10]
+                underline_text = "存取现当天有通联的有"
+                underline_run = p1.add_run(underline_text)
+                underline_run.underline = True
+                p1.add_run(f"{'、'.join(displayed_items)}等{len(display_items)}人；")
+            else:
+                underline_text = "存取现当天有通联的有"
+                underline_run = p1.add_run(underline_text)
+                underline_run.underline = True
+                p1.add_run(f"{'、'.join(display_items)}等{len(display_items)}人；")
         else:
             p1.add_run("未发现存取现与话单匹配的人员；")
 
@@ -1518,7 +1530,19 @@ class NewWordExporter:
                     display_items.append(f"{nm}（{call_date}）")
                 else:
                     display_items.append(nm)
-            p2.add_run(f"发生大额资金当天与话单匹配的人员有{'、'.join(display_items)}等；")
+            
+            # 优化显示格式：最多显示10个，添加下划线和数量
+            if len(display_items) > 10:
+                displayed_items = display_items[:10]
+                underline_text = "发生大额资金当天与话单匹配的人员有"
+                underline_run = p2.add_run(underline_text)
+                underline_run.underline = True
+                p2.add_run(f"{'、'.join(displayed_items)}等{len(display_items)}人；")
+            else:
+                underline_text = "发生大额资金当天与话单匹配的人员有"
+                underline_run = p2.add_run(underline_text)
+                underline_run.underline = True
+                p2.add_run(f"{'、'.join(display_items)}等{len(display_items)}人；")
         else:
             p2.add_run("未发现大额资金与话单匹配的人员；")
 
@@ -1586,10 +1610,41 @@ class NewWordExporter:
                                     items.append(f"{assoc_disp}，通过{'、'.join(via_list)}跟踪")
                                 else:
                                     items.append(assoc_disp)
+                        # 优化显示格式：最多显示10个，添加下划线和数量
                         if items:
-                            lines.append(f"跟踪层级为{level}的人员：{'；'.join(items)}")
+                            if len(items) > 10:
+                                displayed_items = items[:10]
+                                underline_text = f"跟踪层级为{level}的人员"
+                                line_text = f"{underline_text}：{'；'.join(displayed_items)}等{len(items)}人"
+                            else:
+                                underline_text = f"跟踪层级为{level}的人员"
+                                line_text = f"{underline_text}：{'；'.join(items)}等{len(items)}人"
+                            lines.append(line_text)
+                    
                     if lines:
-                        p3.add_run("；".join(lines) + "；")
+                        # 为每个层级添加下划线
+                        for i, line in enumerate(lines):
+                            if i > 0:
+                                p3.add_run("；")
+                            # 提取下划线文本
+                            if "跟踪层级为0的人员" in line:
+                                parts = line.split("：", 1)
+                                underline_run = p3.add_run(parts[0] + "：")
+                                underline_run.underline = True
+                                p3.add_run(parts[1])
+                            elif "跟踪层级为1的人员" in line:
+                                parts = line.split("：", 1)
+                                underline_run = p3.add_run(parts[0] + "：")
+                                underline_run.underline = True
+                                p3.add_run(parts[1])
+                            elif "跟踪层级为2的人员" in line:
+                                parts = line.split("：", 1)
+                                underline_run = p3.add_run(parts[0] + "：")
+                                underline_run.underline = True
+                                p3.add_run(parts[1])
+                            else:
+                                p3.add_run(line)
+                        p3.add_run("；")
                     else:
                         p3.add_run("未发现大额资金跟踪层级区分的重点人员；")
         except Exception as e:

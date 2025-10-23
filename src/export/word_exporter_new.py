@@ -1470,19 +1470,26 @@ class NewWordExporter:
         # 1) 存取现与话单匹配的人员：存取现当天与该人有通联的对手名单（去重），显示单位和通话日期
         p1 = doc.add_paragraph()
         p1.add_run("1.存取现与话单匹配的人员：").bold = True
-        cash_contacts: List[str] = []
+        # 优化：直接构建联系人-日期映射，避免多次循环
+        contact_date_map = {}
         dates = person_cash_dates.get(person_name, set())
         day_map = person_day_contacts.get(person_name, {})
         for d in dates:
             contacts = day_map.get(d, set())
             if contacts:
-                cash_contacts.extend(list(contacts))
-        cash_contacts = sorted(list(set([x for x in cash_contacts if x and str(x).strip()])))
+                for contact in contacts:
+                    # 保留最早日期
+                    if contact not in contact_date_map or d < contact_date_map[contact]:
+                        contact_date_map[contact] = d
+        
+        # 排序联系人
+        cash_contacts = sorted([(contact, d) for contact, d in contact_date_map.items()])
         if cash_contacts:
             display_items = []
-            for nm in cash_contacts:
+            for nm, cash_date in cash_contacts:
                 unit = self._get_unit_for_contact_cached(person_name, nm, data_models)
-                call_date = self._get_call_date_cached(nm, person_name, data_models)
+                # 获取存取现当天的通话日期
+                call_date = self._get_call_date_cached(nm, person_name, data_models, str(cash_date))
                 if unit and call_date:
                     display_items.append(f"{nm}（{unit}、{call_date}）")
                 elif unit:
@@ -1510,18 +1517,25 @@ class NewWordExporter:
         # 2) 大额资金跟踪与话单匹配的人员：发生大额资金当天与该人有通联的对手名单（去重），显示单位和通话日期
         p2 = doc.add_paragraph()
         p2.add_run("2.大额资金跟踪与话单匹配的人员：").bold = True
-        large_contacts: List[str] = []
+        # 优化：直接构建联系人-日期映射，避免多次循环
+        contact_date_map = {}
         ldates = person_large_dates.get(person_name, set())
         for d in ldates:
             contacts = day_map.get(d, set())
             if contacts:
-                large_contacts.extend(list(contacts))
-        large_contacts = sorted(list(set([x for x in large_contacts if x and str(x).strip()])))
+                for contact in contacts:
+                    # 保留最早日期
+                    if contact not in contact_date_map or d < contact_date_map[contact]:
+                        contact_date_map[contact] = d
+        
+        # 排序联系人
+        large_contacts = sorted([(contact, d) for contact, d in contact_date_map.items()])
         if large_contacts:
             display_items = []
-            for nm in large_contacts:
+            for nm, large_date in large_contacts:
                 unit = self._get_unit_for_contact_cached(person_name, nm, data_models)
-                call_date = self._get_call_date_cached(nm, person_name, data_models)
+                # 获取大额资金发生当天的通话日期
+                call_date = self._get_call_date_cached(nm, person_name, data_models, str(large_date))
                 if unit and call_date:
                     display_items.append(f"{nm}（{unit}、{call_date}）")
                 elif unit:
@@ -1765,15 +1779,22 @@ class NewWordExporter:
         contact_unit_cache[cache_key] = unit
         return unit
 
-    def _get_call_date_cached(self, opponent_name: str, person_name: str, data_models: Dict) -> str:
-        """带缓存的通话日期信息获取"""
+    def _get_call_date_cached(self, opponent_name: str, person_name: str, data_models: Dict, target_date: Optional[str] = None) -> str:
+        """带缓存的通话日期信息获取
+        
+        Args:
+            opponent_name: 对方姓名
+            person_name: 本方姓名
+            data_models: 数据模型
+            target_date: 目标日期（格式：YYYY-MM-DD），如果提供则返回该日期当天的通话信息
+        """
         if not hasattr(self, '_cached_data'):
             self._cached_data = {}
         call_date_cache = self._cached_data.setdefault('call_date_cache', {})
-        cache_key = f"{opponent_name}_{person_name}"
+        cache_key = f"{opponent_name}_{person_name}_{target_date if target_date else 'earliest'}"
         if cache_key in call_date_cache:
             return call_date_cache[cache_key]
-        call_date = self._extract_call_date_from_call_data(opponent_name, person_name, data_models)
+        call_date = self._extract_call_date_from_call_data(opponent_name, person_name, data_models, target_date)
         call_date_cache[cache_key] = call_date
         return call_date
 
@@ -2289,8 +2310,15 @@ class NewWordExporter:
             self.logger.warning(f"提取人员{person_name}与{contact_name}通联记录中的单位信息时出错: {e}")
             return ""
 
-    def _extract_call_date_from_call_data(self, opponent_name: str, person_name: str, data_models: Dict) -> str:
-        """从话单数据中提取通话日期信息"""
+    def _extract_call_date_from_call_data(self, opponent_name: str, person_name: str, data_models: Dict, target_date: Optional[str] = None) -> str:
+        """从话单数据中提取通话日期信息
+        
+        Args:
+            opponent_name: 对方姓名
+            person_name: 本方姓名
+            data_models: 数据模型
+            target_date: 目标日期（格式：YYYY-MM-DD），如果提供则返回该日期当天的通话信息
+        """
         try:
             if 'call' in data_models and data_models['call'] and not data_models['call'].data.empty:
                 call_data = data_models['call'].data
@@ -2302,12 +2330,30 @@ class NewWordExporter:
                 ]
                 
                 if not person_calls.empty:
-                    # 获取第一条记录的通话日期
-                    call_date_series = person_calls['呼叫日期'].dropna()
-                    if len(call_date_series) > 0:
-                        call_date = pd.to_datetime(call_date_series.iloc[0], errors='coerce')
-                        if pd.notna(call_date):
-                            return call_date.strftime('%Y年%m月%d日')
+                    # 如果有目标日期，筛选该日期当天的通话记录
+                    if target_date:
+                        try:
+                            target_dt = pd.to_datetime(target_date, errors='coerce')
+                            if pd.notna(target_dt):
+                                # 转换通话记录日期为日期格式进行比较
+                                person_calls = person_calls.copy()
+                                person_calls.loc[:, '呼叫日期_dt'] = pd.to_datetime(person_calls['呼叫日期'], errors='coerce')
+                                person_calls = person_calls[person_calls['呼叫日期_dt'].dt.date == target_dt.date()]
+                        except Exception:
+                            pass
+                    
+                    if not person_calls.empty:
+                        # 获取通话日期（如果有目标日期则返回目标日期，否则返回最早的通话日期）
+                        call_date_series = person_calls['呼叫日期'].dropna()
+                        if len(call_date_series) > 0:
+                            if target_date:
+                                # 返回目标日期当天的通话日期
+                                return target_dt.strftime('%Y年%m月%d日')
+                            else:
+                                # 返回最早的通话日期
+                                call_date = pd.to_datetime(call_date_series.iloc[0], errors='coerce')
+                                if pd.notna(call_date):
+                                    return call_date.strftime('%Y年%m月%d日')
             
             return ""
         except Exception as e:

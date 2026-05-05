@@ -1,0 +1,148 @@
+{
+    "analysis": {
+        "special_date": {
+            "keywords": [
+                "节日", "假期", "周末", "春节", "中秋", "元旦", "重阳", "清明", "国庆", "情人节",
+                "圣诞节", "端午"
+            ],
+            "dates": {
+                "元旦": {"type": "solar", "month": 1, "day": 1},
+                "春节": {"type": "lunar", "month": 1, "day": 1},
+                "元宵节": {"type": "lunar", "month": 1, "day": 15},
+                "情人节": {"type": "solar", "month": 2, "day": 14},
+                "妇女节": {"type": "solar", "month": 3, "day": 8},
+                "清明节": {"type": "solar", "month": 4, "day": 5},
+                "劳动节": {"type": "solar", "month": 5, "day": 1},
+                "端午节": {"type": "lunar", "month": 5, "day": 5},
+                "儿童节": {"type": "solar", "month": 6, "day": 1},
+                "七夕": {"type": "lunar", "month": 7, "day": 7},
+                "建军节": {"type": "solar", "month": 8, "day": 1},
+                "中秋节": {"type": "lunar", "month": 8, "day": 15},
+                "教师节": {"type": "solar", "month": 9, "day": 10},
+                "国庆节": {"type": "solar", "month": 10, "day": 1},
+                "重阳节": {"type": "lunar", "month": 9, "day": 9},
+                "冬至": {"type": "solar", "month": 12, "day": 22},
+                "平安夜": {"type": "solar", "month": 12, "day": 24},
+                "圣诞节": {"type": "solar", "month": 12, "day": 25}
+            }
+        },
+        "integer_amount": {
+            "bank_threshold": 1000,
+            "wechat_threshold": 200,
+            "alipay_threshold": 200
+        },
+        "special_amount": {
+            "amounts": [
+                6.66, 8.88, 13.14, 52.0, 66, 88, 99, 166, 188, 200, 288, 366, 388, 520, 521,
+                588, 666, 688, 777, 888, 999, 1314, 1688, 1888, 2888, 3888, 5200, 5888, 6666,
+                8888, 9999, 13140, 16888, 18888, 28888, 38888, 52000, 58888, 66666, 88888, 99999,
+                131400, 168888, 188888, 288888, 388888, 520000, 588888, 666666, 888888, 999999
+            ],
+            "description": {
+                "6.66": "六六大顺",
+                "8.88": "发发发",
+                "13.14": "一生一世",
+                "52.0": "我爱你",
+                "66": "六六大顺",
+                "88": "发发",
+                "99": "长长久久",
+                "166": "一路顺",
+                "188": "一路发",
+                "200": "爱你你",
+                "288": "爱发发",
+                "366": "生生顺",
+                "388": "生发发",
+                "520": "我爱你",
+                "521": "我爱你",
+                "588": "我发发",
+                "666": "六六六",
+                "688": "六发发",
+                "777": "七七七",
+                "888": "发发发",
+                "999": "长久",
+                "1314": "一生一世",
+                "1688": "一路发发",
+                "1888": "一发发发",
+                "2888": "爱发发发",
+                "3888": "生发发发",
+                "5200": "我爱你你",
+                "5888": "我发发发",
+                "6666": "六六六六",
+                "8888": "发发发发",
+                "9999": "长长久久",
+                "13140": "一生一世你",
+                "16888": "一路发发发",
+                "18888": "一发发发发",
+                "28888": "爱发发发发",
+                "38888": "生发发发发",
+                "52000": "我爱你你你",
+                "58888": "我发发发发",
+                "66666": "六六六六六",
+                "88888": "发发发发发",
+                "99999": "长长久久久",
+                "131400": "一生一世你你",
+                "168888": "一路发发发发",
+                "188888": "一发发发发发",
+                "288888": "爱发发发发发",
+                "388888": "生发发发发发",
+                "520000": "我爱你你你你",
+                "588888": "我发发发发发",
+                "666666": "六六六六六六",
+                "888888": "发发发发发发",
+                "999999": "长长久久久久"
+            }
+        },
+        "cash": {
+            "recognition": {
+                "enable_enhanced_algorithm": true,
+                "confidence_threshold": 0.5,
+                "high_priority_confidence": 0.95,
+                "medium_priority_confidence": 0.8,
+                "low_priority_confidence": 0.6,
+                "large_amount_threshold": 100000,
+                "small_amount_threshold": 10,
+                "enable_fuzzy_matching": true,
+                "enable_amount_analysis": true,
+                "enable_time_analysis": false,
+                "common_cash_amounts": [100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000, 20000, 50000],
+                "round_amount_modulos": [50, 100]
+            }
+        },
+        "key_transactions": {
+            "large_amount_thresholds": {
+                "level1": {"min": 50000, "max": 100000, "name": "5万-10万"},
+                "level2": {"min": 100000, "max": 500000, "name": "10万-50万"},
+                "level3": {"min": 500000, "max": 1000000, "name": "50万-100万"},
+                "level4": {"min": 1000000, "max": 999999999, "name": "100万及以上"}
+            }
+        },
+        "advanced": {
+            "time_analysis": {
+                "enabled": true,
+                "working_hours_start": 9,
+                "working_hours_end": 17,
+                "weekend_analysis": true
+            },
+            "amount_analysis": {
+                "enabled": true,
+                "ranges": [
+                    {"name": "小额", "min": 0, "max": 1000},
+                    {"name": "中额", "min": 1000, "max": 10000},
+                    {"name": "大额", "min": 10000, "max": 100000},
+                    {"name": "巨额", "min": 100000, "max": 999999999}
+                ]
+            },
+            "anomaly_detection": {
+                "enabled": true,
+                "frequency_threshold": 10,
+                "amount_std_threshold": 3,
+                "time_gap_threshold_hours": 1
+            },
+            "pattern_analysis": {
+                "enabled": true,
+                "round_number_threshold": 0.3,
+                "regular_interval_threshold": 0.8
+            }
+        }
+    }
+}

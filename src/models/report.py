@@ -3,7 +3,8 @@ from typing import Optional, List, Dict
 from pydantic import BaseModel, ConfigDict
 
 from src.models.analysis_result import (
-    PersonBaseline, AnomalyItem, PatternMatch, TimelineChain, RiskAssessment
+    PersonBaseline, AnomalyItem, PatternMatch, TimelineChain, RiskAssessment,
+    HabitInterestItem
 )
 
 
@@ -90,6 +91,9 @@ class PersonReportData(BaseModel):
     # 风险研判
     风险研判: Optional[RiskAssessment] = None
 
+    # 习惯兴趣
+    习惯兴趣: list[HabitInterestItem] = []
+
 
 class ReportData(BaseModel):
     """报告完整数据 - 导出器的唯一输入"""
@@ -123,3 +127,4 @@ class ReportData(BaseModel):
     risk_data: list[dict] = []
     cash_detail_data: list[dict] = []
     key_transaction_data: list[dict] = []
+    habit_interest_data: list[dict] = []

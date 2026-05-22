@@ -104,3 +104,9 @@ class KeywordsManager:
             .get("securities", {})
             .get("keywords", [])
         )
+
+    # ---- 习惯兴趣关键词 ----
+
+    def get_habits_interests_categories(self) -> dict:
+        """获取习惯兴趣类别配置（含label/keywords/merchant_patterns）"""
+        return self._keywords.get("habits_interests", {})

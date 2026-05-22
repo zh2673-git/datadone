@@ -53,6 +53,7 @@ class ReportBuilder:
         risk_data = self._build_risk_data(analysis_result)
         cash_detail_data = self._build_cash_detail_data(analysis_result)
         key_transaction_data = self._build_key_transaction_data(analysis_result)
+        habit_interest_data = self._build_habit_interest_data(analysis_result)
 
         # 2. 构建Word数据（每人一份）
         person_reports = {}
@@ -89,6 +90,7 @@ class ReportBuilder:
             risk_data=risk_data,
             cash_detail_data=cash_detail_data,
             key_transaction_data=key_transaction_data,
+            habit_interest_data=habit_interest_data,
         )
 
     # ------------------------------------------------------------------ #
@@ -890,6 +892,7 @@ class ReportBuilder:
             行为模式=ar.patterns.get(person, []),
             时序链=ar.timeline_chains.get(person, []),
             风险研判=ar.risk_assessment.get(person),
+            习惯兴趣=ar.habits_interests.get(person, []),
         )
 
     def _build_cross_summary(self, ar: AnalysisResult) -> list[dict]:
@@ -1291,4 +1294,38 @@ class ReportBuilder:
             -abs(x.get('交易金额', 0)),
         ))
 
+        return rows
+
+    def _build_habit_interest_data(self, ar: AnalysisResult) -> list[dict]:
+        """习惯兴趣明细表"""
+        rows = []
+        for person, items in ar.habits_interests.items():
+            for item in items:
+                rep_tx = []
+                for rt in item.代表性交易:
+                    rep_tx.append(
+                        f"{rt.get('日期', '')}/{rt.get('金额', 0):,.0f}元/{rt.get('对方', '')}"
+                    )
+                rows.append({
+                    '本方姓名': person,
+                    '类别': item.类别,
+                    '子类': item.子类,
+                    '证据类型': item.证据类型,
+                    '匹配关键词': item.匹配关键词,
+                    '交易次数': item.交易次数,
+                    '总金额': item.总金额,
+                    '首次交易日期': item.首次交易日期 or '',
+                    '最近交易日期': item.最近交易日期 or '',
+                    '月均频次': item.月均频次,
+                    '习惯等级': item.习惯等级,
+                    '典型时段': item.典型时段,
+                    '代表性交易': '；'.join(rep_tx),
+                })
+
+        habit_order = {"高频习惯": 0, "低频偏好": 1, "偶尔消费": 2}
+        rows.sort(key=lambda x: (
+            x.get('本方姓名', ''),
+            habit_order.get(x.get('习惯等级', ''), 3),
+            -x.get('月均频次', 0),
+        ))
         return rows

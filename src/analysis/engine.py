@@ -19,6 +19,7 @@ from src.analysis.baseline import BaselineAnalyzer
 from src.analysis.pattern_recognizer import PatternRecognizer
 from src.analysis.timeline_analyzer import TimelineAnalyzer
 from src.analysis.risk_assessor import RiskAssessor
+from src.analysis.habit_interest import HabitInterestAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,9 @@ class AnalysisEngine:
         self.pattern_recognizer = PatternRecognizer(thresholds)
         self.timeline_analyzer = TimelineAnalyzer(thresholds)
         self.risk_assessor = RiskAssessor(thresholds)
+
+        # 习惯兴趣分析器
+        self.habit_interest_analyzer = HabitInterestAnalyzer(keywords, thresholds)
 
     def analyze(self, state: dict, analysis_type: str = 'all') -> AnalysisResult:
         """
@@ -104,6 +108,7 @@ class AnalysisEngine:
         patterns_result = {}
         timeline_result = {}
         risk_result = {}
+        habits_interests_result = {}
 
         # ===== 原有7步 =====
 
@@ -190,6 +195,11 @@ class AnalysisEngine:
                 call_freq_result
             )
 
+        # 12. 习惯兴趣识别
+        if analysis_type in ('all', 'habit_interest'):
+            self.logger.info("执行习惯兴趣识别...")
+            habits_interests_result = self.habit_interest_analyzer.analyze(all_bill_data)
+
         # 存取现统计
         if bank_all is not None and isinstance(bank_all, pd.DataFrame) and not bank_all.empty:
             for person in persons:
@@ -226,6 +236,7 @@ class AnalysisEngine:
             patterns=patterns_result,
             timeline_chains=timeline_result,
             risk_assessment=risk_result,
+            habits_interests=habits_interests_result,
         )
 
     def _merge_person_data(self, data) -> Optional[pd.DataFrame]:

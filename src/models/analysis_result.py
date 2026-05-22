@@ -325,6 +325,31 @@ class RiskAssessment(BaseModel):
     重点时段: str = ""
 
 
+class HabitInterestItem(BaseModel):
+    """习惯/兴趣识别结果"""
+    model_config = ConfigDict(from_attributes=True)
+
+    类别: str = ""
+    子类: str = ""
+    证据类型: str = ""
+    匹配关键词: str = ""
+    交易次数: int = 0
+    总金额: float = 0.0
+    首次交易日期: Optional[str] = None
+    最近交易日期: Optional[str] = None
+    月均频次: float = 0.0
+    习惯等级: str = ""
+    典型时段: str = ""
+    代表性交易: list[dict] = []
+
+
+class HabitInterestOutput(BaseModel):
+    """习惯兴趣分析输出"""
+    model_config = ConfigDict(from_attributes=True)
+
+    habits: dict[str, list[HabitInterestItem]] = {}
+
+
 class AnalysisResult(BaseModel):
     """分析引擎总结果 - 所有子分析的统一输出"""
     model_config = ConfigDict(from_attributes=True)
@@ -352,3 +377,6 @@ class AnalysisResult(BaseModel):
     patterns: dict[str, list[PatternMatch]] = {}
     timeline_chains: dict[str, list[TimelineChain]] = {}
     risk_assessment: dict[str, RiskAssessment] = {}
+
+    # 新增：习惯兴趣识别
+    habits_interests: dict[str, list[HabitInterestItem]] = {}

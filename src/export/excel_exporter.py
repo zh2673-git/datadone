@@ -110,6 +110,12 @@ class ExcelExporter:
 
     RISK_WITH_BASELINE_COLUMNS = ['本方姓名'] + BASELINE_COLUMNS_FOR_RISK + RISK_COLUMNS_FOR_RISK
 
+    HABIT_INTEREST_COLUMNS = [
+        '本方姓名', '类别', '子类', '证据类型', '匹配关键词',
+        '交易次数', '总金额', '首次交易日期', '最近交易日期',
+        '月均频次', '习惯等级', '典型时段', '代表性交易'
+    ]
+
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -156,6 +162,9 @@ class ExcelExporter:
 
             # 工作表10：风险研判表（含基线指标）
             self._write_risk_with_baseline(wb, report_data)
+
+            # 工作表11：习惯兴趣表（新增）
+            self._write_habit_interest(wb, report_data)
 
             # 应用条件格式
             self._apply_conditional_formatting(wb, config)
@@ -511,3 +520,26 @@ class ExcelExporter:
                     cell_value = ws.cell(row=row_idx, column=key_type_col).value
                     if cell_value in key_type_colors:
                         ws.cell(row=row_idx, column=key_type_col).fill = key_type_colors[cell_value]
+
+    def _write_habit_interest(self, wb: Workbook, report_data: ReportData) -> None:
+        """工作表11：习惯兴趣表"""
+        self._write_sheet_from_dicts(
+            wb, '习惯兴趣表', self.HABIT_INTEREST_COLUMNS, report_data.habit_interest_data
+        )
+
+        habit_colors = {
+            "高频习惯": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
+            "低频偏好": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),
+            "偶尔消费": PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"),
+        }
+        ws = wb['习惯兴趣表']
+        habit_col = None
+        for col_idx in range(1, ws.max_column + 1):
+            if ws.cell(row=1, column=col_idx).value == '习惯等级':
+                habit_col = col_idx
+                break
+        if habit_col is not None:
+            for row_idx in range(2, ws.max_row + 1):
+                val = ws.cell(row=row_idx, column=habit_col).value
+                if val in habit_colors:
+                    ws.cell(row=row_idx, column=habit_col).fill = habit_colors[val]

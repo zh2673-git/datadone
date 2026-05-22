@@ -61,6 +61,9 @@ GLOSSARY = [
     ("规避阈值", "交易金额接近但未达到监管报告阈值的交易（如4-5万接近5万现金报告线、40-50万接近50万转账报告线），可能暗示有意识规避监管。详见Excel\"重点收支明细表\""),
     ("特殊金额交易", "包含特殊数字特征的交易金额，如520/1314爱情数字（暗示非正常商业关系）、8888/9999吉利数字（常见于利益输送）。详见Excel\"重点收支明细表\""),
     ("特殊日期交易", "节假日期间的大额交易，可能是\"礼尚往来\"形式下的利益输送。详见Excel\"重点收支明细表\""),
+    ("习惯等级", "根据消费频次判定的行为稳定性。'高频习惯'（月均≥4次）为稳定生活规律，'低频偏好'（月均1-3次）为有意识消费选择，'偶尔消费'（月均<1次）不足以判定为习惯。详见Excel\"习惯兴趣表\""),
+    ("典型时段", "某类消费最常发生的时间段。如'深夜'表示该类消费多在22点后发生，可能反映作息特征。详见Excel\"习惯兴趣表\""),
+    ("商户识别", "通过对方姓名中的商户名称特征（如'XX健身房'）识别消费类别，与关键词匹配互为补充。详见Excel\"习惯兴趣表\""),
 ]
 
 
@@ -425,6 +428,9 @@ class WordExporter:
         # 3.2 行为发现简述（异常+模式+大额流向 合并为一段）
         self._write_behavior_brief(doc, person)
 
+        # 3.3 习惯兴趣画像
+        self._write_habit_interest_brief(doc, person)
+
     def _write_counterparty_overview(self, doc: Document, person: PersonReportData,
                                       report_data: ReportData) -> None:
         """核心交易对手概述 — 从频率表和综合分析表提炼"""
@@ -596,6 +602,62 @@ class WordExporter:
         # 引导查阅Excel
         p = doc.add_paragraph()
         p.add_run('（详细异常明细、行为模式匹配与时序链证据见Excel"异常明细表"和"行为发现表"，大额资金逐笔跟踪见"大额资金跟踪表"）')
+        p.runs[0].font.size = Pt(9)
+        p.runs[0].font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+
+    # ================================================================== #
+    #  3.3 习惯兴趣画像
+    # ================================================================== #
+
+    def _write_habit_interest_brief(self, doc: Document, person: PersonReportData) -> None:
+        """习惯兴趣画像 — 按习惯等级分层呈现"""
+        habits = person.习惯兴趣
+        if not habits:
+            return
+
+        doc.add_heading("习惯兴趣画像", level=4)
+
+        high_freq = [h for h in habits if h.习惯等级 == "高频习惯"]
+        low_freq = [h for h in habits if h.习惯等级 == "低频偏好"]
+        occasional = [h for h in habits if h.习惯等级 == "偶尔消费"]
+
+        if high_freq:
+            p = doc.add_paragraph()
+            run = p.add_run("稳定习惯：")
+            run.bold = True
+            items = []
+            for h in high_freq[:8]:
+                desc = f"{h.类别}（{h.子类}，月均{h.月均频次:.1f}次"
+                if h.典型时段:
+                    desc += f"，{h.典型时段}"
+                desc += "）"
+                items.append(desc)
+            p.add_run("、".join(items))
+
+        if low_freq:
+            p = doc.add_paragraph()
+            run = p.add_run("消费偏好：")
+            run.bold = True
+            items = []
+            for h in low_freq[:6]:
+                desc = f"{h.类别}（{h.子类}，月均{h.月均频次:.1f}次"
+                if h.总金额 > 0:
+                    desc += f"，累计{h.总金额:,.0f}元"
+                desc += "）"
+                items.append(desc)
+            p.add_run("、".join(items))
+
+        if occasional:
+            p = doc.add_paragraph()
+            run = p.add_run("偶尔消费：")
+            run.bold = True
+            items = []
+            for h in occasional[:4]:
+                items.append(f"{h.类别}（{h.子类}）")
+            p.add_run("、".join(items))
+
+        p = doc.add_paragraph()
+        p.add_run('（习惯兴趣详细数据见Excel"习惯兴趣表"）')
         p.runs[0].font.size = Pt(9)
         p.runs[0].font.color.rgb = RGBColor(0x80, 0x80, 0x80)
 

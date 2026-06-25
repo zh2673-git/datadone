@@ -19,6 +19,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import CellIsRule, FormulaRule
 
 from src.models.report import ReportData, ExportConfig
 
@@ -183,37 +184,42 @@ class ExcelExporter:
 
     def _write_sheet_from_dicts(self, wb: Workbook, sheet_name: str,
                                  columns: list, data: list) -> None:
-        """通用方法：将dict列表写入工作表"""
+        """通用方法：将dict列表写入工作表（批量写入优化版）"""
         ws = wb.create_sheet(title=sheet_name)
 
         header_font_white = Font(bold=True, size=11, color="FFFFFF")
         header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        thin_border = Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin'),
-        )
 
+        # 1. 写表头（仅表头加样式）
+        header_row = []
         for col_idx, col_name in enumerate(columns, 1):
             cell = ws.cell(row=1, column=col_idx, value=col_name)
             cell.font = header_font_white
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-            cell.border = thin_border
+            header_row.append(col_name)
 
-        for row_idx, row_data in enumerate(data, 2):
-            for col_idx, col_name in enumerate(columns, 1):
+        # 2. 批量写数据行（用 append 逐行写入，不加逐单元格样式）
+        for row_data in data:
+            row_values = []
+            for col_name in columns:
                 value = row_data.get(col_name, '')
                 if value is None or (isinstance(value, float) and pd.isna(value)):
                     value = ''
                 elif hasattr(value, 'isoformat'):
                     value = value.isoformat()
-                elif isinstance(value, (pd.Timestamp,)):
+                elif isinstance(value, pd.Timestamp):
                     value = str(value)
-                cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                cell.border = thin_border
-                cell.alignment = Alignment(vertical='center', wrap_text=True)
+                row_values.append(value)
+            ws.append(row_values)
 
-        self._auto_column_width(ws, columns)
+        # 3. 固定列宽（避免逐行遍历计算，大幅加速）
+        for col_idx, col_name in enumerate(columns, 1):
+            # 中文字符按2个宽度估算
+            cn_count = sum(1 for c in str(col_name) if '\u4e00' <= c <= '\u9fff')
+            width = len(str(col_name)) + cn_count + 4
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max(width, 10), 40)
+
         ws.freeze_panes = 'A2'
         if data:
             last_col = get_column_letter(len(columns))
@@ -389,157 +395,128 @@ class ExcelExporter:
     # ------------------------------------------------------------------ #
 
     def _apply_conditional_formatting(self, wb: Workbook, config: ExportConfig) -> None:
-        """条件格式：大额标红、存取现高亮、风险等级着色"""
+        """条件格式：大额标红、存取现高亮、风险等级着色（范围规则版，避免逐单元格遍历）"""
         if not config.highlight_large_amount:
             return
 
-        red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-        red_font = Font(color="9C0006")
         threshold = config.large_amount_threshold
 
+        # 预创建填充样式
+        red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        orange_fill = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
+        yellow_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        blue_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+        light_green_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+        gray_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+
         for ws in wb.worksheets:
-            # 大额金额标红
-            amount_col = None
+            if ws.max_row < 2:
+                continue
+
+            # 构建列名→列字母 的映射
+            col_map = {}
             for col_idx in range(1, ws.max_column + 1):
                 header = ws.cell(row=1, column=col_idx).value
-                if header in ('交易金额', '转入金额', '转出金额', '存现金额', '取现金额'):
-                    amount_col = col_idx
-                    break
+                if header:
+                    col_map[header] = get_column_letter(col_idx)
 
-            if amount_col is not None:
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=amount_col).value
-                    try:
-                        if cell_value is not None and abs(float(cell_value)) >= threshold:
-                            for col_idx in range(1, ws.max_column + 1):
-                                ws.cell(row=row_idx, column=col_idx).fill = red_fill
-                                ws.cell(row=row_idx, column=col_idx).font = red_font
-                    except (ValueError, TypeError):
-                        pass
+            last_row = ws.max_row
+            last_col_letter = get_column_letter(ws.max_column)
+            data_range = f"A2:{last_col_letter}{last_row}"
 
-            # 大额标记列着色（★行高亮）
-            marker_col = None
-            for col_idx in range(1, ws.max_column + 1):
-                header = ws.cell(row=1, column=col_idx).value
-                if header == '大额标记':
-                    marker_col = col_idx
-                    break
+            # 1. 大额金额标红（整行着色，用 FormulaRule）
+            for amt_header in ('交易金额', '转入金额', '转出金额', '存现金额', '取现金额'):
+                amt_col = col_map.get(amt_header)
+                if amt_col:
+                    formula = f'ABS(${amt_col}2)>={threshold}'
+                    ws.conditional_formatting.add(
+                        data_range,
+                        FormulaRule(formula=[formula], fill=red_fill)
+                    )
+                    break  # 只对第一个匹配的金额列应用
 
-            if marker_col is not None:
-                orange_fill = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=marker_col).value
-                    if cell_value and '★' in str(cell_value):
-                        ws.cell(row=row_idx, column=marker_col).fill = orange_fill
+            # 2. 大额标记列着色（★行高亮）
+            marker_col = col_map.get('大额标记')
+            if marker_col:
+                marker_range = f"{marker_col}2:{marker_col}{last_row}"
+                ws.conditional_formatting.add(
+                    marker_range,
+                    FormulaRule(formula=[f'ISNUMBER(SEARCH("★",{marker_col}2))'], fill=orange_fill)
+                )
 
-            # 存取现标识高亮
-            cash_col = None
-            for col_idx in range(1, ws.max_column + 1):
-                header = ws.cell(row=1, column=col_idx).value
-                if header == '存取现标识':
-                    cash_col = col_idx
-                    break
+            # 3. 存取现标识高亮
+            cash_col = col_map.get('存取现标识')
+            if cash_col:
+                cash_range = f"{cash_col}2:{cash_col}{last_row}"
+                ws.conditional_formatting.add(
+                    cash_range,
+                    CellIsRule(operator='equal', formula=['"存现"'], fill=yellow_fill)
+                )
+                ws.conditional_formatting.add(
+                    cash_range,
+                    CellIsRule(operator='equal', formula=['"取现"'], fill=yellow_fill)
+                )
 
-            if cash_col is not None:
-                yellow_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=cash_col).value
-                    if cell_value in ('存现', '取现'):
-                        ws.cell(row=row_idx, column=cash_col).fill = yellow_fill
+            # 4. 风险等级着色
+            risk_col = col_map.get('综合风险等级')
+            if risk_col:
+                risk_range = f"{risk_col}2:{risk_col}{last_row}"
+                ws.conditional_formatting.add(
+                    risk_range,
+                    CellIsRule(operator='equal', formula=['"高风险"'], fill=red_fill)
+                )
+                ws.conditional_formatting.add(
+                    risk_range,
+                    CellIsRule(operator='equal', formula=['"中风险"'], fill=yellow_fill)
+                )
+                ws.conditional_formatting.add(
+                    risk_range,
+                    CellIsRule(operator='equal', formula=['"低风险"'], fill=green_fill)
+                )
 
-            # 风险等级着色
-            risk_col = None
-            for col_idx in range(1, ws.max_column + 1):
-                header = ws.cell(row=1, column=col_idx).value
-                if header == '综合风险等级':
-                    risk_col = col_idx
-                    break
+            # 5. 严重程度着色
+            severity_col = col_map.get('严重程度')
+            if severity_col:
+                sev_range = f"{severity_col}2:{severity_col}{last_row}"
+                ws.conditional_formatting.add(
+                    sev_range,
+                    CellIsRule(operator='equal', formula=['"高"'], fill=red_fill)
+                )
+                ws.conditional_formatting.add(
+                    sev_range,
+                    CellIsRule(operator='equal', formula=['"中"'], fill=yellow_fill)
+                )
 
-            if risk_col is not None:
-                risk_colors = {
-                    "高风险": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
-                    "中风险": PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
-                    "低风险": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
-                }
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=risk_col).value
-                    if cell_value in risk_colors:
-                        ws.cell(row=row_idx, column=risk_col).fill = risk_colors[cell_value]
+            # 6. 交叉类型着色
+            cross_col = col_map.get('交叉类型')
+            if cross_col:
+                cross_range = f"{cross_col}2:{cross_col}{last_row}"
+                ws.conditional_formatting.add(
+                    cross_range,
+                    CellIsRule(operator='equal', formula=['"双平台交叉"'], fill=green_fill)
+                )
 
-            # 严重程度着色
-            severity_col = None
-            for col_idx in range(1, ws.max_column + 1):
-                header = ws.cell(row=1, column=col_idx).value
-                if header == '严重程度':
-                    severity_col = col_idx
-                    break
+            # 7. 重点类型着色
+            key_col = col_map.get('重点类型')
+            if key_col:
+                key_range = f"{key_col}2:{key_col}{last_row}"
+                ws.conditional_formatting.add(key_range, CellIsRule(operator='equal', formula=['"规避阈值"'], fill=red_fill))
+                ws.conditional_formatting.add(key_range, CellIsRule(operator='equal', formula=['"特殊金额"'], fill=light_green_fill))
+                ws.conditional_formatting.add(key_range, CellIsRule(operator='equal', formula=['"特殊日期"'], fill=blue_fill))
+                ws.conditional_formatting.add(key_range, CellIsRule(operator='equal', formula=['"工作收入"'], fill=green_fill))
 
-            if severity_col is not None:
-                severity_colors = {
-                    "高": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
-                    "中": PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
-                }
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=severity_col).value
-                    if cell_value in severity_colors:
-                        ws.cell(row=row_idx, column=severity_col).fill = severity_colors[cell_value]
-
-            # 交叉类型着色
-            cross_type_col = None
-            for col_idx in range(1, ws.max_column + 1):
-                header = ws.cell(row=1, column=col_idx).value
-                if header == '交叉类型':
-                    cross_type_col = col_idx
-                    break
-
-            if cross_type_col is not None:
-                cross_colors = {
-                    "双平台交叉": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
-                }
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=cross_type_col).value
-                    if cell_value in cross_colors:
-                        ws.cell(row=row_idx, column=cross_type_col).fill = cross_colors[cell_value]
-
-            # 重点类型着色（重点收支明细表）
-            key_type_col = None
-            for col_idx in range(1, ws.max_column + 1):
-                header = ws.cell(row=1, column=col_idx).value
-                if header == '重点类型':
-                    key_type_col = col_idx
-                    break
-
-            if key_type_col is not None:
-                key_type_colors = {
-                    "规避阈值": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
-                    "特殊金额": PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"),
-                    "特殊日期": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),
-                    "工作收入": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
-                }
-                for row_idx in range(2, ws.max_row + 1):
-                    cell_value = ws.cell(row=row_idx, column=key_type_col).value
-                    if cell_value in key_type_colors:
-                        ws.cell(row=row_idx, column=key_type_col).fill = key_type_colors[cell_value]
+            # 8. 习惯等级着色
+            habit_col = col_map.get('习惯等级')
+            if habit_col:
+                habit_range = f"{habit_col}2:{habit_col}{last_row}"
+                ws.conditional_formatting.add(habit_range, CellIsRule(operator='equal', formula=['"高频习惯"'], fill=green_fill))
+                ws.conditional_formatting.add(habit_range, CellIsRule(operator='equal', formula=['"低频偏好"'], fill=blue_fill))
+                ws.conditional_formatting.add(habit_range, CellIsRule(operator='equal', formula=['"偶尔消费"'], fill=gray_fill))
 
     def _write_habit_interest(self, wb: Workbook, report_data: ReportData) -> None:
         """工作表11：习惯兴趣表"""
         self._write_sheet_from_dicts(
             wb, '习惯兴趣表', self.HABIT_INTEREST_COLUMNS, report_data.habit_interest_data
         )
-
-        habit_colors = {
-            "高频习惯": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
-            "低频偏好": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),
-            "偶尔消费": PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"),
-        }
-        ws = wb['习惯兴趣表']
-        habit_col = None
-        for col_idx in range(1, ws.max_column + 1):
-            if ws.cell(row=1, column=col_idx).value == '习惯等级':
-                habit_col = col_idx
-                break
-        if habit_col is not None:
-            for row_idx in range(2, ws.max_row + 1):
-                val = ws.cell(row=row_idx, column=habit_col).value
-                if val in habit_colors:
-                    ws.cell(row=row_idx, column=habit_col).fill = habit_colors[val]
+        # 习惯等级着色由 _apply_conditional_formatting 统一处理（范围规则）

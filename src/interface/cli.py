@@ -22,17 +22,17 @@ _FILE_TYPE_RULES = [
 _DATA_DIR = 'data'
 
 
-def scan_data_dir(data_dir: str = _DATA_DIR) -> dict[str, str]:
+def scan_data_dir(data_dir: str = _DATA_DIR) -> dict[str, list[str]]:
     """
     扫描 data/ 目录，根据文件名关键词自动识别数据类型。
-    返回 {数据类型: 文件绝对路径}
+    返回 {数据类型: [文件绝对路径列表]}（同类多文件全部保留，按文件名排序）
     仅扫描顶层目录，兼容旧版单文件模式。
     """
     if not os.path.isdir(data_dir):
         return {}
 
-    result = {}
-    for fname in os.listdir(data_dir):
+    result: dict[str, list[str]] = {}
+    for fname in sorted(os.listdir(data_dir)):
         if not fname.endswith(('.xlsx', '.xls', '.csv')):
             continue
         fpath = os.path.join(data_dir, fname)
@@ -41,14 +41,13 @@ def scan_data_dir(data_dir: str = _DATA_DIR) -> dict[str, str]:
         name_lower = fname.lower()
         for dtype, keywords in _FILE_TYPE_RULES:
             if any(kw in name_lower for kw in keywords):
-                if dtype not in result:
-                    result[dtype] = os.path.abspath(fpath)
+                result.setdefault(dtype, []).append(os.path.abspath(fpath))
                 break
 
     return result
 
 
-def scan_person_folders(data_dir: str = _DATA_DIR) -> dict[str, dict[str, str]]:
+def scan_person_folders(data_dir: str = _DATA_DIR) -> dict[str, dict[str, list[str]]]:
     """
     递归扫描 data/ 目录，识别人物文件夹并自动匹配文件类型。
 
@@ -61,28 +60,27 @@ def scan_person_folders(data_dir: str = _DATA_DIR) -> dict[str, dict[str, str]]:
             XX支付宝账单.xlsx   ← alipay
             话单数据预览.xlsx    ← call
 
-    返回 {人物文件夹名: {数据类型: 文件绝对路径}}
+    返回 {人物文件夹名: {数据类型: [文件绝对路径列表]}}（同类多文件全部保留，按文件名排序）
     """
     if not os.path.isdir(data_dir):
         return {}
 
-    person_folders: dict[str, dict[str, str]] = {}
+    person_folders: dict[str, dict[str, list[str]]] = {}
 
     for root, dirs, files in os.walk(data_dir):
         # 跳过隐藏目录和 output 目录
         dirs[:] = [d for d in dirs if not d.startswith('.') and d.lower() != 'output']
 
         # 在当前目录中匹配数据文件
-        folder_files: dict[str, str] = {}
-        for fname in files:
+        folder_files: dict[str, list[str]] = {}
+        for fname in sorted(files):
             if not fname.endswith(('.xlsx', '.xls', '.csv')):
                 continue
             fpath = os.path.join(root, fname)
             name_lower = fname.lower()
             for dtype, keywords in _FILE_TYPE_RULES:
                 if any(kw in name_lower for kw in keywords):
-                    if dtype not in folder_files:
-                        folder_files[dtype] = os.path.abspath(fpath)
+                    folder_files.setdefault(dtype, []).append(os.path.abspath(fpath))
                     break
 
         # 只有包含至少1个数据文件的文件夹才视为人物文件夹
@@ -115,12 +113,21 @@ class CLI:
             if person_folders:
                 print(f"\n[已识别 {len(person_folders)} 个人物文件夹]")
                 for i, (name, files) in enumerate(person_folders.items(), 1):
-                    file_types = '/'.join(files.keys())
+                    file_types = '/'.join(
+                        f"{dtype}({len(paths)})" if len(paths) > 1 else dtype
+                        for dtype, paths in files.items()
+                    )
                     print(f"  {i}. {name} ({file_types})")
             elif auto_paths:
-                print(f"\n[已识别 data/ 目录下 {len(auto_paths)} 个数据文件]")
-                for dtype, path in auto_paths.items():
-                    print(f"  {dtype}: {os.path.basename(path)}")
+                print(f"\n[已识别 data/ 目录下 {len(auto_paths)} 类数据文件]")
+                for dtype, paths in auto_paths.items():
+                    n = len(paths)
+                    if n > 1:
+                        print(f"  {dtype}: {n} 个文件")
+                        for p in paths:
+                            print(f"    - {os.path.basename(p)}")
+                    else:
+                        print(f"  {dtype}: {os.path.basename(paths[0])}")
 
             # 动态菜单
             print("\n请选择操作：")
@@ -191,9 +198,16 @@ class CLI:
 
         # 如果已有自动识别的数据，直接用
         if auto_paths:
-            print(f"已自动识别 {len(auto_paths)} 个数据文件：")
-            for dtype, path in auto_paths.items():
-                print(f"  {dtype}: {os.path.basename(path)}")
+            total_files = sum(len(v) for v in auto_paths.values())
+            print(f"已自动识别 {len(auto_paths)} 类数据文件（共 {total_files} 个）：")
+            for dtype, paths in auto_paths.items():
+                n = len(paths)
+                if n > 1:
+                    print(f"  {dtype}: {n} 个文件")
+                    for p in paths:
+                        print(f"    - {os.path.basename(p)}")
+                else:
+                    print(f"  {dtype}: {os.path.basename(paths[0])}")
             confirm = input("\n使用以上文件？(Y/n): ").strip().lower()
             if confirm != 'n':
                 try:
@@ -215,12 +229,16 @@ class CLI:
         except Exception as e:
             print(f"数据加载失败：{e}")
 
-    def _select_persons_menu(self, person_folders: dict[str, dict[str, str]]):
+    def _select_persons_menu(self, person_folders: dict[str, dict[str, list[str]]]):
         """选择人员并批量分析"""
         print("\n--- 选择人员 ---")
         persons = list(person_folders.keys())
         for i, name in enumerate(persons, 1):
-            file_types = '/'.join(person_folders[name].keys())
+            files = person_folders[name]
+            file_types = '/'.join(
+                f"{dtype}({len(paths)})" if len(paths) > 1 else dtype
+                for dtype, paths in files.items()
+            )
             print(f"  {i}. {name} ({file_types})")
 
         print(f"\n输入方式：")
@@ -378,9 +396,16 @@ class CLI:
         data_paths = auto_paths or {}
 
         if data_paths:
-            print(f"已自动识别 {len(data_paths)} 个数据文件：")
-            for dtype, path in data_paths.items():
-                print(f"  {dtype}: {os.path.basename(path)}")
+            total_files = sum(len(v) for v in data_paths.values())
+            print(f"已自动识别 {len(data_paths)} 类数据文件（共 {total_files} 个）：")
+            for dtype, paths in data_paths.items():
+                n = len(paths)
+                if n > 1:
+                    print(f"  {dtype}: {n} 个文件")
+                    for p in paths:
+                        print(f"    - {os.path.basename(p)}")
+                else:
+                    print(f"  {dtype}: {os.path.basename(paths[0])}")
             confirm = input("使用以上文件直接运行？(Y/n): ").strip().lower()
             if confirm == 'n':
                 data_paths = self._manual_input_paths()
@@ -408,25 +433,35 @@ class CLI:
         except Exception as e:
             print(f"运行失败：{e}")
 
-    def _manual_input_paths(self) -> dict[str, str]:
-        """手动输入数据路径"""
-        print("请输入数据文件路径（留空跳过）：")
+    def _manual_input_paths(self) -> dict[str, 'str | list[str]']:
+        """手动输入数据路径（每个类型支持逗号分隔的多个文件）"""
+        print("请输入数据文件路径（留空跳过，多个文件用逗号分隔）：")
         data_paths = {}
 
         bank_path = input("  银行数据文件路径: ").strip()
         if bank_path:
-            data_paths['bank'] = bank_path
+            data_paths['bank'] = self._parse_multi_paths(bank_path)
 
         wechat_path = input("  微信数据文件路径: ").strip()
         if wechat_path:
-            data_paths['wechat'] = wechat_path
+            data_paths['wechat'] = self._parse_multi_paths(wechat_path)
 
         alipay_path = input("  支付宝数据文件路径: ").strip()
         if alipay_path:
-            data_paths['alipay'] = alipay_path
+            data_paths['alipay'] = self._parse_multi_paths(alipay_path)
 
         call_path = input("  话单数据文件路径: ").strip()
         if call_path:
-            data_paths['call'] = call_path
+            data_paths['call'] = self._parse_multi_paths(call_path)
 
         return data_paths
+
+    @staticmethod
+    def _parse_multi_paths(raw: str):
+        """把用户输入解析为 str（单文件）或 list[str]（多文件）"""
+        parts = [p.strip().strip('"').strip("'") for p in raw.split(',') if p.strip()]
+        if not parts:
+            return ''
+        if len(parts) == 1:
+            return parts[0]
+        return parts

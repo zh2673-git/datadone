@@ -1,6 +1,7 @@
 """特殊分析器 - 特殊日期/金额/整数金额识别"""
 
 import pandas as pd
+import numpy as np
 import logging
 from typing import Dict, List, Optional
 from datetime import date
@@ -84,7 +85,7 @@ class SpecialAnalyzer:
     # 特殊日期分析
     # ------------------------------------------------------------------
     def _analyze_special_dates(self, df: pd.DataFrame, person: str) -> list[SpecialDateItem]:
-        """分析特殊日期"""
+        """分析特殊日期（向量化版本）"""
         date_mapping = self._build_date_mapping()
         if not date_mapping:
             return []
@@ -92,21 +93,25 @@ class SpecialAnalyzer:
         if "交易日期" not in df.columns:
             return []
 
+        # 一次性把整列转 date，再用 isin 批量过滤
+        try:
+            dates = pd.to_datetime(df["交易日期"], errors="coerce").dt.date
+        except Exception:
+            return []
+
+        mask = dates.isin(date_mapping.keys())
+        if not mask.any():
+            return []
+
         items = []
-        for idx, row in df.iterrows():
-            try:
-                tx_date = pd.to_datetime(row["交易日期"], errors="coerce")
-                if pd.isna(tx_date):
-                    continue
-                tx_date_val = tx_date.date()
-                if tx_date_val in date_mapping:
-                    items.append(SpecialDateItem(
-                        index=int(idx) if isinstance(idx, int) else len(items),
-                        交易日期=tx_date_val,
-                        特殊日期名称=date_mapping[tx_date_val],
-                    ))
-            except Exception:
-                continue
+        matched_idx = df.index[mask]
+        matched_dates = dates[mask]
+        for i, (idx, d) in enumerate(zip(matched_idx, matched_dates)):
+            items.append(SpecialDateItem(
+                index=int(idx) if isinstance(idx, (int, np.integer)) else i,
+                交易日期=d,
+                特殊日期名称=date_mapping[d],
+            ))
 
         return items
 
@@ -184,7 +189,7 @@ class SpecialAnalyzer:
     # 特殊金额分析
     # ------------------------------------------------------------------
     def _analyze_special_amounts(self, df: pd.DataFrame, person: str) -> list[SpecialAmountItem]:
-        """分析特殊金额"""
+        """分析特殊金额（向量化版本）"""
         if "交易金额" not in df.columns:
             return []
 
@@ -192,28 +197,35 @@ class SpecialAnalyzer:
         special_amounts = self.thresholds.get("analysis.special_amount.amounts", [])
         if not special_amounts:
             special_amounts = self._default_special_amounts()
+        special_amounts_set = set(special_amounts)
 
         love_amounts = {520, 521, 1314, 13140, 131400, 5200, 52000, 520000, 52.0, 13.14}
+        all_amounts = special_amounts_set | love_amounts
+
+        # 一次性数值化并取绝对值
+        abs_amount = pd.to_numeric(df["交易金额"], errors="coerce").abs()
+        mask = abs_amount.isin(all_amounts)
+        if not mask.any():
+            return []
 
         items = []
-        for idx, row in df.iterrows():
-            try:
-                amount = abs(float(row["交易金额"]))
-                if amount in special_amounts or amount in love_amounts:
-                    # 判定类型
-                    if amount in love_amounts:
-                        special_type = "爱情数字"
-                    else:
-                        special_type = "其他特殊金额"
-
-                    items.append(SpecialAmountItem(
-                        index=int(idx) if isinstance(idx, int) else len(items),
-                        交易金额=amount,
-                        特殊类型=special_type,
-                        特殊金额名=str(int(amount)) if amount == int(amount) else str(amount),
-                    ))
-            except (ValueError, TypeError):
+        matched_idx = df.index[mask]
+        matched_amounts = abs_amount[mask]
+        for i, (idx, amt) in enumerate(zip(matched_idx, matched_amounts)):
+            if pd.isna(amt):
                 continue
+            amt_f = float(amt)
+            if amt_f in love_amounts:
+                special_type = "爱情数字"
+            else:
+                special_type = "其他特殊金额"
+
+            items.append(SpecialAmountItem(
+                index=int(idx) if isinstance(idx, (int, np.integer)) else i,
+                交易金额=amt_f,
+                特殊类型=special_type,
+                特殊金额名=str(int(amt_f)) if amt_f == int(amt_f) else str(amt_f),
+            ))
 
         return items
 

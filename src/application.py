@@ -57,13 +57,14 @@ class Application:
             'raw_data': {},
         }
 
-    def load_data(self, data_paths: dict[str, str]) -> None:
+    def load_data(self, data_paths: dict[str, 'str | list[str]']) -> None:
         """
         加载所有数据源
 
         Args:
             data_paths: 数据源类型→文件路径的映射
-                {'bank': 'path/to/bank.xlsx', 'wechat': 'path/to/wechat.csv', ...}
+                {'bank': 'path/to/bank.xlsx', 'wechat': ['w1.xlsx','w2.xlsx'], ...}
+                单个路径用 str，多个同类文件用 list[str]
         """
         self.logger.info("开始加载数据...")
 
@@ -72,36 +73,36 @@ class Application:
         # 加载银行数据
         if 'bank' in data_paths:
             try:
-                bank_result = self.bank_loader.load(data_paths['bank'])
+                bank_result = self._load_with_loader(self.bank_loader, data_paths['bank'])
                 raw_data['bank'] = bank_result
-                self.logger.info(f"银行数据加载完成: {data_paths['bank']}")
+                self._log_loaded('银行数据', data_paths['bank'])
             except Exception as e:
                 self.logger.warning(f"银行数据加载失败: {e}")
 
         # 加载微信数据
         if 'wechat' in data_paths:
             try:
-                wechat_result = self.wechat_loader.load(data_paths['wechat'])
+                wechat_result = self._load_with_loader(self.wechat_loader, data_paths['wechat'])
                 raw_data['wechat'] = wechat_result
-                self.logger.info(f"微信数据加载完成: {data_paths['wechat']}")
+                self._log_loaded('微信数据', data_paths['wechat'])
             except Exception as e:
                 self.logger.warning(f"微信数据加载失败: {e}")
 
         # 加载支付宝数据
         if 'alipay' in data_paths:
             try:
-                alipay_result = self.alipay_loader.load(data_paths['alipay'])
+                alipay_result = self._load_with_loader(self.alipay_loader, data_paths['alipay'])
                 raw_data['alipay'] = alipay_result
-                self.logger.info(f"支付宝数据加载完成: {data_paths['alipay']}")
+                self._log_loaded('支付宝数据', data_paths['alipay'])
             except Exception as e:
                 self.logger.warning(f"支付宝数据加载失败: {e}")
 
         # 加载话单数据
         if 'call' in data_paths:
             try:
-                call_result = self.call_loader.load(data_paths['call'])
+                call_result = self._load_with_loader(self.call_loader, data_paths['call'])
                 raw_data['call'] = call_result
-                self.logger.info(f"话单数据加载完成: {data_paths['call']}")
+                self._log_loaded('话单数据', data_paths['call'])
             except Exception as e:
                 self.logger.warning(f"话单数据加载失败: {e}")
 
@@ -109,6 +110,54 @@ class Application:
         self._state['data_loaded'] = True
         self._state['data_paths'] = data_paths
         self.logger.info("数据加载完成")
+
+    @staticmethod
+    def _load_with_loader(loader, paths):
+        """兼容 str / list[str] 路径的加载入口"""
+        if isinstance(paths, (list, tuple)):
+            if len(paths) == 0:
+                return {}
+            if len(paths) == 1:
+                return loader.load(paths[0])
+            return loader.load_many(list(paths))
+        # 单个字符串路径
+        return loader.load(paths)
+
+    def _log_loaded(self, name: str, paths) -> None:
+        if isinstance(paths, (list, tuple)):
+            files = ', '.join(os.path.basename(p) for p in paths)
+            self.logger.info(f"{name}加载完成: {len(paths)} 个文件 [{files}]")
+        else:
+            self.logger.info(f"{name}加载完成: {paths}")
+
+    @staticmethod
+    def _merge_into_combined(combined: dict, new_data: dict) -> None:
+        """合并多人/多文件结果到 combined 字典，同 person 走 concat"""
+        for person, df in new_data.items():
+            if df is None or df.empty:
+                continue
+            if person in combined:
+                combined[person] = pd.concat(
+                    [combined[person], df], ignore_index=True
+                )
+            else:
+                combined[person] = df.reset_index(drop=True) if not df.index.is_unique else df.copy()
+
+    @staticmethod
+    def _flatten_paths(paths) -> list[str]:
+        """把 str / list[str] / dict[str, str|list] 形式的路径扁平化为 list[str]"""
+        out: list[str] = []
+        if isinstance(paths, str):
+            return [paths]
+        if isinstance(paths, (list, tuple)):
+            return [p for p in paths if isinstance(p, str)]
+        if isinstance(paths, dict):
+            for v in paths.values():
+                if isinstance(v, str):
+                    out.append(v)
+                elif isinstance(v, (list, tuple)):
+                    out.extend(p for p in v if isinstance(p, str))
+        return out
 
     def analyze(self, analysis_type: str = 'all') -> AnalysisResult:
         """
@@ -223,29 +272,29 @@ class Application:
 
             if 'bank' in data_paths:
                 try:
-                    result = self.bank_loader.load(data_paths['bank'])
-                    combined_raw['bank'].update(result)
+                    result = self._load_with_loader(self.bank_loader, data_paths['bank'])
+                    self._merge_into_combined(combined_raw['bank'], result)
                 except Exception as e:
                     self.logger.warning(f"  {person_name} 银行数据加载失败: {e}")
 
             if 'wechat' in data_paths:
                 try:
-                    result = self.wechat_loader.load(data_paths['wechat'])
-                    combined_raw['wechat'].update(result)
+                    result = self._load_with_loader(self.wechat_loader, data_paths['wechat'])
+                    self._merge_into_combined(combined_raw['wechat'], result)
                 except Exception as e:
                     self.logger.warning(f"  {person_name} 微信数据加载失败: {e}")
 
             if 'alipay' in data_paths:
                 try:
-                    result = self.alipay_loader.load(data_paths['alipay'])
-                    combined_raw['alipay'].update(result)
+                    result = self._load_with_loader(self.alipay_loader, data_paths['alipay'])
+                    self._merge_into_combined(combined_raw['alipay'], result)
                 except Exception as e:
                     self.logger.warning(f"  {person_name} 支付宝数据加载失败: {e}")
 
             if 'call' in data_paths:
                 try:
-                    result = self.call_loader.load(data_paths['call'])
-                    combined_raw['call'].update(result)
+                    result = self._load_with_loader(self.call_loader, data_paths['call'])
+                    self._merge_into_combined(combined_raw['call'], result)
                 except Exception as e:
                     self.logger.warning(f"  {person_name} 话单数据加载失败: {e}")
 
@@ -254,7 +303,7 @@ class Application:
             'data_loaded': True,
             'analysis_result': None,
             'raw_data': combined_raw,
-            'data_paths': {dtype: ','.join(paths.values()) for dtype, paths in person_folders.items()},
+            'data_paths': {dtype: ','.join(self._flatten_paths(paths)) for dtype, paths in person_folders.items()},
         }
 
         # 执行分析

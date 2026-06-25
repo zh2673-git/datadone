@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """分析引擎 - 编排所有子分析器的执行（11步升级版）"""
 
+import gc
 import logging
 from typing import Dict, List, Optional
 
@@ -115,97 +116,156 @@ class AnalysisEngine:
         # 1. 存取现识别
         if analysis_type in ('all', 'cash'):
             self.logger.info("执行存取现识别...")
-            cash_result = self.cash_recognizer.analyze(bank_data if isinstance(bank_data, dict) else {})
-            bank_all = self._merge_person_data(bank_data) if isinstance(bank_data, dict) else bank_data
+            try:
+                cash_result = self.cash_recognizer.analyze(bank_data if isinstance(bank_data, dict) else {})
+                bank_all = self._merge_person_data(bank_data) if isinstance(bank_data, dict) else bank_data
+            except Exception as e:
+                self.logger.error(f"存取现识别失败: {e}", exc_info=True)
+                cash_result = {}
 
         # 为所有平台计算收入/支出金额
-        self._calc_all_income_expense(bank_all, wechat_all, alipay_all)
+        try:
+            self._calc_all_income_expense(bank_all, wechat_all, alipay_all)
+        except Exception as e:
+            self.logger.error(f"收入/支出金额计算失败: {e}", exc_info=True)
 
         # 2. 频率分析
         if analysis_type in ('all', 'frequency'):
             self.logger.info("执行频率分析...")
-            freq_result = self.frequency_analyzer.analyze(all_bill_data)
-            if call_data:
-                call_df = call_all if isinstance(call_all, pd.DataFrame) else self._merge_person_data(call_data)
-                if call_df is not None and isinstance(call_df, pd.DataFrame):
-                    call_freq_result = self.frequency_analyzer.analyze_calls(call_df)
+            try:
+                freq_result = self.frequency_analyzer.analyze(all_bill_data)
+                if call_data:
+                    call_df = call_all if isinstance(call_all, pd.DataFrame) else self._merge_person_data(call_data)
+                    if call_df is not None and isinstance(call_df, pd.DataFrame):
+                        call_freq_result = self.frequency_analyzer.analyze_calls(call_df)
+                        del call_df
+            except Exception as e:
+                self.logger.error(f"频率分析失败: {e}", exc_info=True)
+            gc.collect()  # 频率分析产生大量中间groupby对象，及时回收
 
         # 3. 特殊分析
         if analysis_type in ('all', 'special'):
             self.logger.info("执行特殊分析...")
-            special_output = self.special_analyzer.analyze(all_bill_data)
-            special_dates = special_output.dates
-            special_amounts = special_output.amounts
+            try:
+                special_output = self.special_analyzer.analyze(all_bill_data)
+                special_dates = special_output.dates
+                special_amounts = special_output.amounts
+                del special_output
+            except Exception as e:
+                self.logger.error(f"特殊分析失败: {e}", exc_info=True)
+            gc.collect()
 
         # 4. 综合交叉分析
         if analysis_type in ('all', 'cross'):
             self.logger.info("执行综合交叉分析...")
-            cross_result = self.cross_analyzer.analyze(freq_result, call_freq_result)
+            try:
+                cross_result = self.cross_analyzer.analyze(freq_result, call_freq_result)
+            except Exception as e:
+                self.logger.error(f"综合交叉分析失败: {e}", exc_info=True)
 
         # 5. 重点收支识别
         if analysis_type in ('all', 'key_transaction'):
             self.logger.info("执行重点收支识别...")
-            key_result = self.key_transaction_analyzer.analyze(all_bill_data)
+            try:
+                key_result = self.key_transaction_analyzer.analyze(all_bill_data)
+            except Exception as e:
+                self.logger.error(f"重点收支识别失败: {e}", exc_info=True)
+            gc.collect()
 
         # 6. 大额资金追踪
         if analysis_type in ('all', 'fund_tracking'):
             self.logger.info("执行大额资金追踪...")
-            call_df_for_tracking = call_all if isinstance(call_all, pd.DataFrame) else None
-            fund_output = self.fund_tracker.analyze(all_bill_data, cash_result, call_df_for_tracking)
-            fund_result = fund_output.tracking
-            cash_call_result = fund_output.cash_call_match
+            try:
+                call_df_for_tracking = call_all if isinstance(call_all, pd.DataFrame) else None
+                fund_output = self.fund_tracker.analyze(all_bill_data, cash_result, call_df_for_tracking)
+                fund_result = fund_output.tracking
+                cash_call_result = fund_output.cash_call_match
+                del fund_output
+            except Exception as e:
+                self.logger.error(f"大额资金追踪失败: {e}", exc_info=True)
+            gc.collect()
 
         # 7. 高级分析
         if analysis_type in ('all', 'advanced'):
             self.logger.info("执行高级分析...")
-            advanced_result = self.advanced_analyzer.analyze(all_bill_data)
+            try:
+                advanced_result = self.advanced_analyzer.analyze(all_bill_data)
+            except Exception as e:
+                self.logger.error(f"高级分析失败: {e}", exc_info=True)
+            gc.collect()
 
         # ===== 新增4步 =====
 
         # 8. 行为基线（依赖存取现标识等前置结果）
         if analysis_type in ('all', 'baseline'):
             self.logger.info("执行行为基线分析...")
-            baseline_result = self.baseline_analyzer.analyze(all_bill_data, call_all)
+            try:
+                baseline_result = self.baseline_analyzer.analyze(all_bill_data, call_all)
+            except Exception as e:
+                self.logger.error(f"行为基线分析失败: {e}", exc_info=True)
+            gc.collect()
 
         # 9. 异常检测（基于基线）
         if analysis_type in ('all', 'advanced') and baseline_result:
             self.logger.info("执行基于基线的异常检测...")
-            anomalies_result = self.advanced_analyzer.detect_anomalies_with_baseline(
-                all_bill_data, baseline_result
-            )
+            try:
+                anomalies_result = self.advanced_analyzer.detect_anomalies_with_baseline(
+                    all_bill_data, baseline_result
+                )
+            except Exception as e:
+                self.logger.error(f"异常检测失败: {e}", exc_info=True)
+            gc.collect()
 
         # 10. 行为模式识别
         if analysis_type in ('all', 'pattern'):
             self.logger.info("执行行为模式识别...")
-            patterns_result = self.pattern_recognizer.analyze(
-                all_bill_data, call_all, baseline_result, anomalies_result
-            )
+            try:
+                patterns_result = self.pattern_recognizer.analyze(
+                    all_bill_data, call_all, baseline_result, anomalies_result
+                )
+            except Exception as e:
+                self.logger.error(f"行为模式识别失败: {e}", exc_info=True)
+            gc.collect()
 
         # 10. 时序链分析
         if analysis_type in ('all', 'timeline'):
             self.logger.info("执行时序链分析...")
-            timeline_result = self.timeline_analyzer.analyze(all_bill_data, call_all)
+            try:
+                timeline_result = self.timeline_analyzer.analyze(all_bill_data, call_all)
+            except Exception as e:
+                self.logger.error(f"时序链分析失败: {e}", exc_info=True)
+            gc.collect()
 
         # 11. 风险研判
         if analysis_type in ('all', 'risk'):
             self.logger.info("执行风险研判...")
-            risk_result = self.risk_assessor.assess(
-                persons, baseline_result, anomalies_result,
-                patterns_result, timeline_result, cross_result,
-                call_freq_result
-            )
+            try:
+                risk_result = self.risk_assessor.assess(
+                    persons, baseline_result, anomalies_result,
+                    patterns_result, timeline_result, cross_result,
+                    call_freq_result
+                )
+            except Exception as e:
+                self.logger.error(f"风险研判失败: {e}", exc_info=True)
 
         # 12. 习惯兴趣识别
         if analysis_type in ('all', 'habit_interest'):
             self.logger.info("执行习惯兴趣识别...")
-            habits_interests_result = self.habit_interest_analyzer.analyze(all_bill_data)
+            try:
+                habits_interests_result = self.habit_interest_analyzer.analyze(all_bill_data)
+            except Exception as e:
+                self.logger.error(f"习惯兴趣识别失败: {e}", exc_info=True)
+            gc.collect()
 
         # 存取现统计
-        if bank_all is not None and isinstance(bank_all, pd.DataFrame) and not bank_all.empty:
-            for person in persons:
-                person_data = bank_all[bank_all['本方姓名'] == person]
-                bank_deposit[person] = person_data.loc[person_data['存取现标识'] == '存现', '收入金额'].sum()
-                bank_withdraw[person] = person_data.loc[person_data['存取现标识'] == '取现', '支出金额'].sum()
+        try:
+            if bank_all is not None and isinstance(bank_all, pd.DataFrame) and not bank_all.empty:
+                for person in persons:
+                    person_data = bank_all[bank_all['本方姓名'] == person]
+                    bank_deposit[person] = person_data.loc[person_data['存取现标识'] == '存现', '收入金额'].sum()
+                    bank_withdraw[person] = person_data.loc[person_data['存取现标识'] == '取现', '支出金额'].sum()
+        except Exception as e:
+            self.logger.error(f"存取现统计失败: {e}", exc_info=True)
 
         # 更新原始数据引用
         state['raw_data'] = {

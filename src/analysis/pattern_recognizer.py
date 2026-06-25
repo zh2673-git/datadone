@@ -37,6 +37,7 @@ class PatternRecognizer:
         Returns:
             {本方姓名: [PatternMatch]}
         """
+        import gc
         result: dict[str, list[PatternMatch]] = {}
 
         # 收集人员数据
@@ -44,26 +45,56 @@ class PatternRecognizer:
         baseline = baseline or {}
         anomalies = anomalies or {}
 
-        for person, df in all_persons_data.items():
+        # 预处理话单：按人员分组，避免每人复制整个话单导致内存爆炸
+        call_by_person: dict[str, pd.DataFrame] = {}
+        if call_data is not None and isinstance(call_data, pd.DataFrame) and not call_data.empty:
+            if '本方姓名' in call_data.columns:
+                # 预转换日期列，避免在循环里反复转换
+                call_prep = call_data.copy()
+                if '呼叫日期' in call_prep.columns:
+                    call_prep['呼叫日期_dt'] = pd.to_datetime(call_prep['呼叫日期'], errors='coerce')
+                    call_prep = call_prep.dropna(subset=['呼叫日期_dt'])
+                for person_name, group in call_prep.groupby('本方姓名'):
+                    call_by_person[str(person_name)] = group
+                del call_prep
+            else:
+                # 无本方姓名列，作为公共数据保留
+                call_by_person['__all__'] = call_data
+
+        total = len(all_persons_data)
+        for idx, (person, df) in enumerate(all_persons_data.items(), 1):
             patterns = []
             bl = baseline.get(person)
 
-            # P1: 周期性收入
-            patterns.extend(self._check_periodic_income(person, df, bl))
+            # 取该人员自己的话单（不再复制整个话单）
+            person_call = call_by_person.get(person)
+            if person_call is None:
+                person_call = call_by_person.get('__all__')
 
-            # P2: 资金中转
-            patterns.extend(self._check_fund_transfer(person, df, bl))
+            try:
+                # P1: 周期性收入
+                patterns.extend(self._check_periodic_income(person, df, bl))
 
-            # P3: 通讯-资金关联
-            patterns.extend(self._check_comm_fund_link(person, df, call_data, bl))
+                # P2: 资金中转
+                patterns.extend(self._check_fund_transfer(person, df, bl))
 
-            # P4: 规避检测
-            patterns.extend(self._check_threshold_avoidance(person, df))
+                # P3: 通讯-资金关联
+                patterns.extend(self._check_comm_fund_link(person, df, person_call, bl))
 
-            # P5: 特殊关系
-            patterns.extend(self._check_special_relation(person, df, call_data))
+                # P4: 规避检测
+                patterns.extend(self._check_threshold_avoidance(person, df))
+
+                # P5: 特殊关系
+                patterns.extend(self._check_special_relation(person, df, person_call))
+            except Exception as e:
+                self.logger.warning(f"人员 {person} 行为模式识别失败，已跳过: {e}")
 
             result[person] = patterns
+
+            # 每20人强制回收内存，避免大循环内存累积
+            if idx % 20 == 0:
+                gc.collect()
+                self.logger.info(f"  行为模式识别进度: {idx}/{total}")
 
         return result
 
@@ -247,33 +278,40 @@ class PatternRecognizer:
                                call_data, bl: Optional[PersonBaseline]) -> list[PatternMatch]:
         """P3: 通话后24小时内与通话对手资金往来≥3次"""
         matches = []
-        if call_data is None or call_data.empty:
+        if call_data is None or (hasattr(call_data, 'empty') and call_data.empty):
             return matches
         if '对方姓名' not in df.columns:
             return matches
 
         window_hours = self.thresholds.get("analysis.pattern.comm_fund_window_hours", 24) if self.thresholds else 24
 
-        # 获取话单中与被核查人通话的对手
-        call_df = call_data.copy() if isinstance(call_data, pd.DataFrame) else None
+        # call_data 已在 analyze() 中按人员预过滤并预转换日期列，这里直接用
+        call_df = call_data if isinstance(call_data, pd.DataFrame) else None
         if call_df is None or call_df.empty:
             return matches
 
-        if '本方姓名' in call_df.columns:
-            call_df = call_df[call_df['本方姓名'] == person]
+        # 兼容：若未预过滤则按人员过滤
+        if '本方姓名' in call_df.columns and person is not None:
+            # 检查是否已只含该人员
+            if call_df['本方姓名'].nunique() > 1:
+                call_df = call_df[call_df['本方姓名'] == person]
         if call_df.empty:
             return matches
 
         if '呼叫日期' not in call_df.columns or '对方姓名' not in call_df.columns:
             return matches
 
-        call_df['呼叫日期_dt'] = pd.to_datetime(call_df['呼叫日期'], errors='coerce')
-        call_df = call_df.dropna(subset=['呼叫日期_dt'])
+        # 日期列可能已预转换（_呼叫日期_dt），避免重复转换
+        if '呼叫日期_dt' not in call_df.columns:
+            call_df = call_df.copy()
+            call_df['呼叫日期_dt'] = pd.to_datetime(call_df['呼叫日期'], errors='coerce')
+            call_df = call_df.dropna(subset=['呼叫日期_dt'])
 
-        # 准备资金数据
-        df = df.copy()
-        df['交易日期_dt'] = pd.to_datetime(df['交易日期'], errors='coerce')
-        df = df.dropna(subset=['交易日期_dt'])
+        # 准备资金数据（复用，不复制整个df）
+        if '交易日期_dt' not in df.columns:
+            df = df.copy()
+            df['交易日期_dt'] = pd.to_datetime(df['交易日期'], errors='coerce')
+            df = df.dropna(subset=['交易日期_dt'])
 
         # 找出在话单和账单中共同出现的对手
         bill_opponents = set(df[df['对方姓名'].notna() & (df['对方姓名'] != '')]['对方姓名'].unique())
@@ -481,17 +519,18 @@ class PatternRecognizer:
 
         # 条件3: 深夜(22-6点)通话≥3次
         c3 = False
-        if call_data is not None and not call_data.empty:
-            call_df = call_data.copy() if isinstance(call_data, pd.DataFrame) else None
-            if call_df is not None and not call_df.empty:
-                if '本方姓名' in call_df.columns:
+        if call_data is not None and isinstance(call_data, pd.DataFrame) and not call_data.empty:
+            call_df = call_data
+            # 兼容：若未预过滤则按人员过滤
+            if '本方姓名' in call_df.columns and person is not None:
+                if call_df['本方姓名'].nunique() > 1:
                     call_df = call_df[call_df['本方姓名'] == person]
-                if '呼叫日期' in call_df.columns:
-                    times = pd.to_datetime(call_df['呼叫日期'], errors='coerce')
-                    if not times.empty:
-                        late_calls = times[(times.dt.hour >= 22) | (times.dt.hour < 6)]
-                        if len(late_calls) >= 3:
-                            c3 = True
+            if '呼叫日期' in call_df.columns:
+                times = pd.to_datetime(call_df['呼叫日期'], errors='coerce')
+                if not times.empty:
+                    late_calls = times[(times.dt.hour >= 22) | (times.dt.hour < 6)]
+                    if len(late_calls) >= 3:
+                        c3 = True
 
         # 匹配度：满足2个条件=60%，3个=85%
         conditions_met = sum([c1, c2, c3])

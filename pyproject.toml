@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "datadone-re"
-version = "1.0.2"
+version = "1.1.0"
 description = "多源数据分析系统 - 自动化数据分析与报告生成"
 requires-python = ">=3.10"
 dependencies = [

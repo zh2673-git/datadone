@@ -117,6 +117,11 @@ class ExcelExporter:
         '月均频次', '习惯等级', '典型时段', '代表性交易'
     ]
 
+    # 工作表12：AI 摘要表列（可选）
+    AI_SUMMARY_COLUMNS = [
+        '本方姓名', '类型', '标题', '内容', '置信度', '风险等级', '验证方向', '证据数量'
+    ]
+
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -166,6 +171,10 @@ class ExcelExporter:
 
             # 工作表11：习惯兴趣表（新增）
             self._write_habit_interest(wb, report_data)
+
+            # 工作表12：AI 摘要表（可选）
+            if report_data.ai_summary_data:
+                self._write_ai_summary(wb, report_data)
 
             # 应用条件格式
             self._apply_conditional_formatting(wb, config)
@@ -520,3 +529,23 @@ class ExcelExporter:
             wb, '习惯兴趣表', self.HABIT_INTEREST_COLUMNS, report_data.habit_interest_data
         )
         # 习惯等级着色由 _apply_conditional_formatting 统一处理（范围规则）
+
+    def _write_ai_summary(self, wb: Workbook, report_data: ReportData) -> None:
+        """工作表12：AI 摘要表"""
+        # 标准化 ai_summary_data 字段
+        normalized = []
+        for row in report_data.ai_summary_data:
+            normalized.append({
+                '本方姓名': row.get('本方姓名', ''),
+                '类型': row.get('类型', ''),
+                '标题': row.get('标题', ''),
+                '内容': row.get('内容', ''),
+                '置信度': row.get('置信度', ''),
+                '风险等级': row.get('风险等级', ''),
+                '验证方向': row.get('验证方向', ''),
+                '证据数量': row.get('证据数量', 0),
+            })
+
+        self._write_sheet_from_dicts(
+            wb, 'AI摘要', self.AI_SUMMARY_COLUMNS, normalized
+        )

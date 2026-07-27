@@ -6,6 +6,7 @@ from src.models.analysis_result import (
     PersonBaseline, AnomalyItem, PatternMatch, TimelineChain, RiskAssessment,
     HabitInterestItem
 )
+from src.ai.models import AIInsight
 
 
 class ExportConfig(BaseModel):
@@ -94,6 +95,9 @@ class PersonReportData(BaseModel):
     # 习惯兴趣
     习惯兴趣: list[HabitInterestItem] = []
 
+    # AI 分析产物（可选注入）
+    ai_insights: Optional[AIInsight] = None
+
 
 class ReportData(BaseModel):
     """报告完整数据 - 导出器的唯一输入"""
@@ -128,3 +132,6 @@ class ReportData(BaseModel):
     cash_detail_data: list[dict] = []
     key_transaction_data: list[dict] = []
     habit_interest_data: list[dict] = []
+
+    # 新增：AI 摘要数据（Excel AI 摘要工作表）
+    ai_summary_data: list[dict] = []

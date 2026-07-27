@@ -98,6 +98,15 @@ class CLI:
     def __init__(self):
         self.app = Application()
 
+    def _ask_ai_enabled(self) -> bool:
+        """询问用户是否启用 AI 分析。"""
+        # 如果配置文件未启用 AI，默认不询问直接返回 False
+        ai_config = getattr(self.app, 'ai_config', None)
+        if ai_config is None or not ai_config.enabled:
+            return False
+        choice = input("是否启用 AI 智能解读？(y/N): ").strip().lower()
+        return choice in ("y", "yes", "是")
+
     def start(self):
         """交互式菜单"""
         print("=" * 60)
@@ -283,8 +292,12 @@ class CLI:
         choice = input("请输入选项 (1-3): ").strip()
         export_format = format_map.get(choice, 'both')
 
+        ai_enabled = self._ask_ai_enabled()
+        if ai_enabled:
+            print("已启用 AI 智能解读（基于规则信号生成叙事与假设）。")
+
         print(f"\n开始批量处理 {len(person_folders)} 人...")
-        results = self.app.run_batch(person_folders, export_format=export_format)
+        results = self.app.run_batch(person_folders, export_format=export_format, ai_enabled=ai_enabled)
 
         # 汇总结果
         print("\n" + "=" * 50)
@@ -321,9 +334,13 @@ class CLI:
         choice = input("请输入选项 (1-3): ").strip()
         export_format = format_map.get(choice, 'both')
 
+        ai_enabled = self._ask_ai_enabled()
+        if ai_enabled:
+            print("已启用 AI 智能解读（基于规则信号生成叙事与假设）。")
+
         try:
             print(f"\n开始合并分析 {len(person_folders)} 人...")
-            paths = self.app.run_combined(person_folders, export_format=export_format)
+            paths = self.app.run_combined(person_folders, export_format=export_format, ai_enabled=ai_enabled)
 
             print("\n===== 合并分析完成 =====")
             for fmt, path in paths.items():
@@ -358,9 +375,15 @@ class CLI:
         choice = input("请输入选项 (1-8): ").strip()
         analysis_type = type_map.get(choice, 'all')
 
+        ai_enabled = self._ask_ai_enabled()
+        if ai_enabled:
+            print("已启用 AI 智能解读（基于规则信号生成叙事与假设）。")
+
         try:
-            result = self.app.analyze(analysis_type)
+            result = self.app.analyze(analysis_type, ai_enabled=ai_enabled)
             print(f"分析完成！共分析 {len(result.persons)} 人")
+            if ai_enabled and result.ai_insights:
+                print(f"AI 解读已生成 {len(result.ai_insights)} 人")
         except Exception as e:
             print(f"分析失败：{e}")
 
@@ -380,8 +403,12 @@ class CLI:
         choice = input("请输入选项 (1-3): ").strip()
         export_format = format_map.get(choice, 'both')
 
+        ai_enabled = self._ask_ai_enabled()
+        if ai_enabled:
+            print("导出时将注入已生成的 AI 解读。")
+
         try:
-            paths = self.app.export(export_format)
+            paths = self.app.export(export_format, ai_enabled=ai_enabled)
             print("报告导出完成！")
             for fmt, path in paths.items():
                 print(f"  {fmt}: {path}")
@@ -425,8 +452,12 @@ class CLI:
         choice = input("请输入选项 (1-3): ").strip()
         export_format = format_map.get(choice, 'both')
 
+        ai_enabled = self._ask_ai_enabled()
+        if ai_enabled:
+            print("已启用 AI 智能解读（基于规则信号生成叙事与假设）。")
+
         try:
-            paths = self.app.run(data_paths, export_format=export_format)
+            paths = self.app.run(data_paths, export_format=export_format, ai_enabled=ai_enabled)
             print("\n===== 全部完成 =====")
             for fmt, path in paths.items():
                 print(f"  {fmt}: {path}")

@@ -3,6 +3,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from src.ai.models import AIInsight
+
 
 class CashRecognitionItem(BaseModel):
     """存取现识别结果"""
@@ -380,3 +382,6 @@ class AnalysisResult(BaseModel):
 
     # 新增：习惯兴趣识别
     habits_interests: dict[str, list[HabitInterestItem]] = {}
+
+    # 新增：AI 协同层产物
+    ai_insights: dict[str, AIInsight] = {}

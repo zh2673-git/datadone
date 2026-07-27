@@ -149,5 +149,19 @@
     "ui": {
         "max_preview_rows": 10,
         "max_preview_cols": 10
+    },
+    "ai": {
+        "enabled": false,
+        "provider": "mock",
+        "model": "qwen2.5:7b",
+        "api_base": "",
+        "api_key": "",
+        "temperature": 0.3,
+        "max_tokens": 4096,
+        "timeout": 120,
+        "cache_enabled": true,
+        "cache_dir": "cache/ai",
+        "max_retries": 1,
+        "prompts_dir": "src/ai/prompts"
     }
 }

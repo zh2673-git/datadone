@@ -15,10 +15,12 @@ dependencies = [
     "pydantic>=2.0.0",
     "zhdate>=0.1",
     "tqdm>=4.62.0",
+    "jinja2>=3.1.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.1"]
+ai = ["openai>=1.0.0"]
 
 [project.scripts]
 datadone = "main:main"

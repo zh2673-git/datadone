@@ -4,7 +4,7 @@
 
 import logging
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 import pandas as pd
 
@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class Application:
-    """应用入口 - 协调数据层、分析层、导出层的完整流程"""
+    """应用入口 - 协调数据层、分析层、导出层、AI 协同层的完整流程"""
 
-    def __init__(self):
+    def __init__(self, ai_enabled: bool = False):
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # 配置层
@@ -50,12 +50,61 @@ class Application:
         self.excel_exporter = ExcelExporter()
         self.word_exporter = WordExporter()
 
+        # AI 协同层（可选）
+        self.ai_enabled = ai_enabled
+        self.ai_config = None
+        self.ai_provider = None
+        self.narrative_engine = None
+        self.hypothesis_engine = None
+        self.ai_report_builder = None
+        self.fallback_manager = None
+        self._init_ai_layer()
+
         # 全局状态
         self._state: dict = {
             'data_loaded': False,
             'analysis_result': None,
             'raw_data': {},
         }
+
+    def _init_ai_layer(self):
+        """根据配置初始化 AI 协同层。"""
+        from src.ai.config import AIConfig
+        from src.ai.provider import LLMProvider
+        from src.ai.narrative_engine import NarrativeEngine
+        from src.ai.hypothesis_engine import HypothesisEngine
+        from src.ai.ai_report_builder import AIReportBuilder
+        from src.ai.fallback_manager import FallbackManager
+
+        self.ai_config = AIConfig(self.settings.get('ai', {}))
+        # 运行时参数或配置文件任一开启，则启用 AI 协同层
+        effective_enabled = self.ai_enabled or self.ai_config.enabled
+        self.ai_config._raw['enabled'] = effective_enabled
+        self.ai_enabled = effective_enabled
+
+        if not self.ai_config.enabled:
+            return
+
+        try:
+            self.ai_provider = LLMProvider.from_config(self.ai_config)
+            self.narrative_engine = NarrativeEngine(
+                provider=self.ai_provider,
+                config=self.ai_config,
+            )
+            self.hypothesis_engine = HypothesisEngine(
+                provider=self.ai_provider,
+                config=self.ai_config,
+            )
+            self.ai_report_builder = AIReportBuilder(
+                narrative_engine=self.narrative_engine,
+                hypothesis_engine=self.hypothesis_engine,
+            )
+            self.fallback_manager = FallbackManager()
+            self.logger.info("AI 协同层已初始化")
+        except Exception as e:
+            self.logger.error(f"AI 协同层初始化失败: {e}")
+            self.ai_enabled = False
+            self.ai_config._raw['enabled'] = False
 
     def load_data(self, data_paths: dict[str, 'str | list[str]']) -> None:
         """
@@ -159,7 +208,7 @@ class Application:
                     out.extend(p for p in v if isinstance(p, str))
         return out
 
-    def analyze(self, analysis_type: str = 'all') -> AnalysisResult:
+    def analyze(self, analysis_type: str = 'all', ai_enabled: bool = False) -> AnalysisResult:
         """
         执行分析
 
@@ -167,6 +216,7 @@ class Application:
             analysis_type: 分析类型
                 'all' | 'frequency' | 'cash' | 'special' | 'cross' |
                 'key_transaction' | 'fund_tracking' | 'advanced'
+            ai_enabled: 是否启用 AI 分析（需在初始化时已启用或配置中开启）
         Returns:
             AnalysisResult: 分析结果
         """
@@ -176,19 +226,57 @@ class Application:
         self.logger.info(f"开始执行分析，类型: {analysis_type}")
 
         result = self.analysis_engine.analyze(self._state, analysis_type)
+
+        # AI 协同层：把规则信号翻译为叙事与假设
+        if ai_enabled and self.ai_enabled and self.narrative_engine and self.hypothesis_engine:
+            try:
+                self.logger.info("开始执行 AI 分析...")
+                result.ai_insights = self._generate_ai_insights(result)
+                self.logger.info(f"AI 分析完成，共 {len(result.ai_insights)} 人")
+            except Exception as e:
+                if self.fallback_manager:
+                    self.fallback_manager.log_fallback(str(e))
+                self.logger.warning(f"AI 分析失败，已降级: {e}")
+                result.ai_insights = {}
+
         self._state['analysis_result'] = result
 
         self.logger.info(f"分析完成，共分析 {len(result.persons)} 人")
         return result
 
+    def _generate_ai_insights(self, result: AnalysisResult) -> dict[str, Any]:
+        """为每个人员生成 AI 分析产物。"""
+        from src.ai.models import AIInsight
+        insights: dict[str, AIInsight] = {}
+
+        for person in result.persons:
+            self.logger.info(f"  AI 分析: {person}")
+            person_insight = AIInsight(本方姓名=person)
+
+            # 人员级叙事
+            narrative_insight = self.narrative_engine.generate_person_narrative(person, result)
+            person_insight.人员级叙事 = narrative_insight.人员级叙事
+
+            # 线索级叙事
+            person_insight.线索级叙事 = self.narrative_engine.generate_clue_narratives(person, result)
+
+            # 调查假设
+            person_insight.调查假设 = self.hypothesis_engine.generate_hypotheses(person, result)
+
+            insights[person] = person_insight
+
+        return insights
+
     def export(self, export_format: str = 'both',
-               config: Optional[ExportConfig] = None) -> dict[str, str]:
+               config: Optional[ExportConfig] = None,
+               ai_enabled: bool = False) -> dict[str, str]:
         """
         导出报告
 
         Args:
             export_format: 导出格式 'excel' | 'word' | 'both'
             config: 导出配置
+            ai_enabled: 是否在报告中注入 AI 分析产物
         Returns:
             {格式: 文件路径}
         """
@@ -205,6 +293,16 @@ class Application:
             analysis_result,
             raw_data=self._state.get('raw_data', {})
         )
+
+        # AI 报告增强
+        if ai_enabled and self.ai_report_builder and analysis_result.ai_insights:
+            try:
+                self.logger.info("注入 AI 分析产物到报告...")
+                report_data = self.ai_report_builder.enrich(
+                    report_data, analysis_result.ai_insights
+                )
+            except Exception as e:
+                self.logger.warning(f"AI 报告增强失败，已跳过: {e}")
 
         output_paths = {}
 
@@ -223,7 +321,8 @@ class Application:
     def run(self, data_paths: dict[str, str],
             analysis_type: str = 'all',
             export_format: str = 'both',
-            config: Optional[ExportConfig] = None) -> dict[str, str]:
+            config: Optional[ExportConfig] = None,
+            ai_enabled: bool = False) -> dict[str, str]:
         """
         一键运行：加载→分析→导出
 
@@ -232,22 +331,24 @@ class Application:
             analysis_type: 分析类型
             export_format: 导出格式
             config: 导出配置
+            ai_enabled: 是否启用 AI 分析并在报告中注入 AI 产物
         Returns:
             {格式: 文件路径}
         """
         # 1. 加载数据
         self.load_data(data_paths)
 
-        # 2. 执行分析
-        self.analyze(analysis_type)
+        # 2. 执行分析（可选 AI）
+        self.analyze(analysis_type, ai_enabled=ai_enabled)
 
-        # 3. 导出报告
-        return self.export(export_format, config)
+        # 3. 导出报告（可选 AI 增强）
+        return self.export(export_format, config, ai_enabled=ai_enabled)
 
     def run_combined(self, person_folders: dict[str, dict[str, str]],
                      analysis_type: str = 'all',
                      export_format: str = 'both',
-                     output_dir: str = 'output') -> dict[str, str]:
+                     output_dir: str = 'output',
+                     ai_enabled: bool = False) -> dict[str, str]:
         """
         合并分析：将所有人员数据加载在一起统一分析，生成一份合并报告。
         这样可以识别人物之间的资金往来关系、交叉交易对手等。
@@ -257,6 +358,7 @@ class Application:
             analysis_type: 分析类型
             export_format: 导出格式
             output_dir: 输出目录
+            ai_enabled: 是否启用 AI 分析并在报告中注入 AI 产物
         Returns:
             {格式: 文件路径}
         """
@@ -306,17 +408,18 @@ class Application:
             'data_paths': {dtype: ','.join(self._flatten_paths(paths)) for dtype, paths in person_folders.items()},
         }
 
-        # 执行分析
-        self.analyze(analysis_type)
+        # 执行分析（可选 AI）
+        self.analyze(analysis_type, ai_enabled=ai_enabled)
 
-        # 导出报告
+        # 导出报告（可选 AI 增强）
         config = ExportConfig(output_dir=os.path.join(output_dir, '合并分析'))
-        return self.export(export_format, config)
+        return self.export(export_format, config, ai_enabled=ai_enabled)
 
     def run_batch(self, person_folders: dict[str, dict[str, str]],
                   analysis_type: str = 'all',
                   export_format: str = 'both',
-                  base_output_dir: str = 'output') -> dict[str, dict[str, str]]:
+                  base_output_dir: str = 'output',
+                  ai_enabled: bool = False) -> dict[str, dict[str, str]]:
         """
         批量运行：对每个人物文件夹分别执行 加载→分析→导出
 
@@ -325,6 +428,7 @@ class Application:
             analysis_type: 分析类型
             export_format: 导出格式
             base_output_dir: 输出根目录
+            ai_enabled: 是否启用 AI 分析并在报告中注入 AI 产物
         Returns:
             {人物名: {格式: 文件路径}}
         """
@@ -346,7 +450,7 @@ class Application:
                 person_output_dir = os.path.join(base_output_dir, person_name)
                 config = ExportConfig(output_dir=person_output_dir)
 
-                paths = self.run(data_paths, analysis_type, export_format, config)
+                paths = self.run(data_paths, analysis_type, export_format, config, ai_enabled=ai_enabled)
                 all_results[person_name] = paths
 
                 # 打印结果

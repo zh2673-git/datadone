@@ -99,6 +99,7 @@ class WordExporter:
             doc.add_heading(f"{idx}、{person}", level=2)
             self._write_financial_overview(doc, person_data, report_data)
             self._write_key_findings(doc, person_data, report_data)
+            self._write_ai_insights(doc, person_data)
             self._write_risk_and_suggestions(doc, person_data)
 
         # 附录：术语说明
@@ -766,6 +767,55 @@ class WordExporter:
             run = p.add_run("重点时段：")
             run.bold = True
             p.add_run(ra.重点时段)
+
+    def _write_ai_insights(self, doc: Document, person: PersonReportData) -> None:
+        """AI 智能解读（基于规则信号的叙事与假设）"""
+        if not person.ai_insights:
+            return
+
+        insight = person.ai_insights
+        has_content = (
+            insight.人员级叙事 or
+            insight.线索级叙事 or
+            insight.调查假设
+        )
+        if not has_content:
+            return
+
+        doc.add_heading("（AI）智能解读与调查提示", level=3)
+
+        # 人员级叙事
+        if insight.人员级叙事:
+            doc.add_heading("AI 综合叙事", level=4)
+            for block in insight.人员级叙事:
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.3)
+                run = p.add_run(f"{block.标题}（置信度：{block.置信度}）")
+                run.bold = True
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.3)
+                p.add_run(block.内容)
+
+        # 调查假设
+        if insight.调查假设:
+            doc.add_heading("AI 调查假设", level=4)
+            for idx, hypo in enumerate(insight.调查假设, 1):
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.3)
+                run = p.add_run(f"假设 {idx}：{hypo.标题}（风险等级：{hypo.风险等级}）")
+                run.bold = True
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.3)
+                p.add_run(hypo.描述)
+                if hypo.验证方向:
+                    p = doc.add_paragraph()
+                    p.paragraph_format.left_indent = Inches(0.3)
+                    p.add_run("建议核实方向：" + "；".join(hypo.验证方向))
+
+        # 证据来源提示
+        p = doc.add_paragraph()
+        p.add_run("【说明】以上内容由 AI 根据规则分析结果生成，仅供调查参考，"
+                  "具体结论需结合原始数据人工复核。").italic = True
 
     # ================================================================== #
     #  附录：术语说明

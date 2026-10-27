@@ -4,6 +4,14 @@
 
 面向多源数据分析场景的自动化分析系统，自动处理银行账单、微信账单、支付宝账单和话单数据，生成结构化的 Excel 详表 + Word 解读式分析报告。新增 AI 协同层后，可将规则引擎发现的异常、模式、风险自动转写为自然语言叙事和可验证假设。
 
+## 宣传片
+
+[![《DataDone · 纪检监察数据分析》介绍片](https://zh2673-git.github.io/make-video/media/datadone-poster.jpg)](https://zh2673-git.github.io/make-video/datadone.html)
+
+1 分 57 秒的产品介绍片：18 镜、1920×1080，真实界面截图与代码绘制画面混合，
+卡通头像出镜讲解，旁白为本人克隆音色。全片由 [make-video](https://github.com/zh2673-git/make-video) 流水线生成。
+[▶ 在线观看](https://zh2673-git.github.io/make-video/datadone.html)
+
 ## 重构说明
 
 本项目是对旧版多源数据分析系统的全面重构（`datadone` → `datadone-re`），重构方案基于 [**本质探索 Skill**](https://github.com/zh2673-git/essence-programming) 进行纯逻辑推理形成。
